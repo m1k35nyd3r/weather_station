@@ -1,0 +1,12 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "ESP-IDF Debug",
+            "type": "espidf",
+            "request": "launch",
+            "tvdName": "esp32p4",
+            "openOCDConfigs": []
+        }
+    ]
+}

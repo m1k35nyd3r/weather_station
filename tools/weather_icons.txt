@@ -1,0 +1,25 @@
+# Weather Icons glyphs compiled into the firmware.
+# One `wi-` name per line; see ./tools/gen_weather_icons.py --list
+# Add a line, re-run the generator, then map it in main/icons/icons.c.
+
+# --- conditions the WMO codes map to (main/icons/icons.c) ---
+wi-day-sunny            # clear
+wi-day-cloudy           # mainly clear / partly cloudy
+wi-cloudy               # overcast
+wi-fog                  # fog
+wi-sprinkle             # drizzle
+wi-rain                 # rain
+wi-snow                 # snow
+wi-showers              # rain showers
+wi-thunderstorm         # thunderstorm
+
+# --- night variants, for when we have a sunrise/sunset check ---
+wi-night-clear
+wi-night-alt-cloudy
+wi-night-alt-rain
+
+# --- detail glyphs for the stat tiles ---
+wi-humidity
+wi-strong-wind
+wi-thermometer
+wi-raindrop

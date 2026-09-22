@@ -1,0 +1,27 @@
+# ESP-IDF build output
+build/
+managed_components/
+dependencies.lock
+
+# Local configuration. sdkconfig is generated from sdkconfig.defaults and
+# holds the Wi-Fi credentials entered via menuconfig, so it is never tracked.
+sdkconfig
+sdkconfig.old
+sdkconfig.ci
+
+# Cached downloads for tools/gen_weather_icons.py (re-fetched on demand).
+tools/.cache/
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store
+
+# Vendor material with no reference value for this project.
+# 8-Burn operation is a 204MB Windows flashing GUI (we use esptool);
+# Demo_Arduino duplicates pin data already captured in README.md.
+# The IDF demos stay: their BSP is the reference for the CSI camera,
+# ES8311 codec and SD card, and examples/slave/CMakeLists.txt is what
+# identifies the C6's factory firmware version.
+docs/JC1060P470C_I_W/8-Burn operation/
+docs/JC1060P470C_I_W/1-Demo/Demo_Arduino/

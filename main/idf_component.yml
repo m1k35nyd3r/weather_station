@@ -1,0 +1,15 @@
+dependencies:
+  espressif/cjson: "^1.7.19"
+  # Pinned to match the ESP-Hosted slave firmware already on this board's
+  # ESP32-C6 (v0.0.6, per docs/.../Demo_IDF/examples/slave/CMakeLists.txt).
+  # Host and slave versions must match or esp_hosted_init() blocks forever.
+  espressif/esp_hosted:
+    version: "=0.0.6"
+  espressif/esp_wifi_remote:
+    version: "0.*"
+  esp_lcd_jd9165:
+    path: "../components/esp_lcd_jd9165"
+  espressif/esp_lcd_touch_gt911: "^1.1.0"
+  espressif/esp_lvgl_port: "^2.6.0"
+  lvgl/lvgl: ">=9,<10"
+  idf: ">=5.4,<6.0"

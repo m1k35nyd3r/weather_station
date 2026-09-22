@@ -1,0 +1,20 @@
+{
+  "idf.currentSetup": "/home/mike.snyder/.espressif/v5.4.4/esp-idf",
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32p4"
+  },
+  "clangd.path": "/home/mike.snyder/.espressif/tools/esp-clangd/esp-21.1.3_20260408/esp-clangd/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=**",
+    "--compile-commands-dir=/home/mike.snyder/Documents/Code/Projects/Weather_Station/build"
+  ],
+  "idf.flashType": "JTAG",
+  "chat.tools.terminal.autoApprove": {
+    "true": true
+  },
+  "idf.port": "/dev/ttyACM0",
+  "idf.monitorPort": "/dev/ttyACM0",
+  "idf.openOcdLaunchArgs": []
+
+}

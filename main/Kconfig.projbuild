@@ -1,0 +1,33 @@
+menu "Weather Station"
+
+# These are intentionally blank. Real values are set with `idf.py menuconfig`
+# and land in sdkconfig, which is gitignored, so nothing secret is committed.
+
+config WEATHER_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+    help
+        Name of the 2.4GHz network to join. Wi-Fi runs on the board's
+        ESP32-C6 co-processor; the ESP32-P4 has no radio of its own.
+
+config WEATHER_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+    help
+        WPA2 passphrase. Stored in sdkconfig, which is not tracked by git.
+
+config WEATHER_LATITUDE
+    string "Fallback latitude"
+    default ""
+    help
+        Used only until a ZIP code is saved on the Location screen. Once one
+        is entered it is resolved to coordinates and persisted in NVS, which
+        takes precedence over this value on every later boot.
+
+config WEATHER_LONGITUDE
+    string "Fallback longitude"
+    default ""
+    help
+        See the latitude help text.
+
+endmenu
