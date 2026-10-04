@@ -1,3 +1,21 @@
+/* All screens, navigation and data binding, built on LVGL.
+ *
+ * Structure:
+ *   - palette and geometry constants, then small helpers (cards, labels, glyphs)
+ *   - one build_*() function per page, plus the shared header builders
+ *   - show_page() switches pages; pages are created once and hidden/shown
+ *   - the public ui_set_*() functions at the bottom, which other tasks call to
+ *     push data in. Each takes the LVGL lock itself, so they are safe from any
+ *     task; the build_*() and *_event() functions run inside the LVGL task.
+ *
+ * Pages: Today, Next 12 Hours, Current Radar (the three nav tabs), plus the Day
+ * detail page (opened from Today) and the two settings pages behind the gear.
+ *
+ * Theming: every colour is a field of the active palette (COL_*), and
+ * apply_theme() recolours the live widget tree between the dark and light
+ * palettes, so nothing is rebuilt and no state is lost.
+ */
+
 #include "ui.h"
 
 #include <math.h>
@@ -11,16 +29,63 @@
 
 #include "icons/icons.h"
 
-/* Palette and geometry come straight from the approved 1024x600 mockup. */
-#define COL_BG        lv_color_hex(0x102A43)
-#define COL_CARD      lv_color_hex(0x17334F)
-#define COL_CARD_ALT  lv_color_hex(0x1D3E5E)
-#define COL_TEXT      lv_color_hex(0xF0F4F8)
-#define COL_MUTED     lv_color_hex(0x9FB3C8)
-#define COL_ACCENT    lv_color_hex(0x7CC4FA)
-#define COL_WARM      lv_color_hex(0xF0B429)
-#define COL_RAIN      lv_color_hex(0x47A3F3)
-#define COL_DISABLED  lv_color_hex(0x5A7A96)
+/* Palette and geometry come straight from the approved 1024x600 mockup. Colours
+ * are runtime values so the settings screen can switch between dark and light:
+ * every COL_* reads the active palette. */
+typedef struct {
+    lv_color_t bg, card, card_alt, text, muted, accent, warm, rain, disabled;
+    lv_color_t grid, border, cloud;
+} palette_t;
+
+static palette_t pal;
+static bool light_mode;
+
+#define COL_BG        (pal.bg)
+#define COL_CARD      (pal.card)
+#define COL_CARD_ALT  (pal.card_alt)
+#define COL_TEXT      (pal.text)
+#define COL_MUTED     (pal.muted)
+#define COL_ACCENT    (pal.accent)
+#define COL_WARM      (pal.warm)
+#define COL_RAIN      (pal.rain)
+#define COL_DISABLED  (pal.disabled)
+#define COL_GRID      (pal.grid)     /* chart grid lines */
+#define COL_BORDER    (pal.border)   /* ZIP field outline */
+#define COL_CLOUD     (pal.cloud)    /* cloud / fog glyphs */
+
+/* Fill `p` with the dark or light colour set. Both sets keep the same roles
+ * (card is always the surface, accent the highlight) so a theme switch can map
+ * old colours to new ones by role. */
+static void load_palette(palette_t *p, bool light)
+{
+    if (light) {
+        p->bg = lv_color_hex(0xE3EAF2);
+        p->card = lv_color_hex(0xFFFFFF);
+        p->card_alt = lv_color_hex(0xD3DFEB);
+        p->text = lv_color_hex(0x102A43);
+        p->muted = lv_color_hex(0x52667A);
+        p->accent = lv_color_hex(0x1D6FB8);
+        p->warm = lv_color_hex(0xD98200);
+        p->rain = lv_color_hex(0x1F78C8);
+        p->disabled = lv_color_hex(0x98A9BA);
+        p->grid = lv_color_hex(0xD5DFEA);
+        p->border = lv_color_hex(0xB8C7D6);
+        p->cloud = lv_color_hex(0x5F7C99);
+    } else {
+        p->bg = lv_color_hex(0x102A43);
+        p->card = lv_color_hex(0x17334F);
+        p->card_alt = lv_color_hex(0x1D3E5E);
+        p->text = lv_color_hex(0xF0F4F8);
+        p->muted = lv_color_hex(0x9FB3C8);
+        p->accent = lv_color_hex(0x7CC4FA);
+        p->warm = lv_color_hex(0xF0B429);
+        p->rain = lv_color_hex(0x47A3F3);
+        p->disabled = lv_color_hex(0x5A7A96);
+        p->grid = lv_color_hex(0x24405C);
+        p->border = lv_color_hex(0x2A4A6A);
+        p->cloud = lv_color_hex(0xBAE3FF);
+    }
+}
 
 #define PAD           24
 #define GAP           16
@@ -28,11 +93,17 @@
 #define PAGE_W        976      // 1024 - 2 * PAD
 #define PAGE_H        468      // 600 - 2 * PAD - NAV_H - GAP
 #define HEADER_H      64
+/* The dark/light toggle sits at the right end of the settings header; other
+ * right-aligned items on those pages stop short of it. */
+#define THEME_BTN_W   190
+#define SETTINGS_RIGHT_X (THEME_BTN_W + 16)
 
 #define ZIP_LEN       5
 
 static const char *TAG = "ui";
 
+/* Wi-Fi settings: Scan button, the current connection, a scrolling list of
+ * networks and a status line. The list itself is filled by ui_set_wifi_list(). */
 static void build_wifi(lv_obj_t *page);
 static void build_modal(lv_obj_t *screen);
 
@@ -134,14 +205,16 @@ static ui_callbacks_t callbacks;
 
 /* ---------------------------------------------------------------- utils --- */
 
+/* Tint for a weather glyph, chosen from the WMO code ranges. */
 static lv_color_t condition_color(int code)
 {
     if (code <= 1) return COL_WARM;               // clear / mostly clear
-    if (code <= 48) return lv_color_hex(0xBAE3FF); // cloud / fog
+    if (code <= 48) return COL_CLOUD;                // cloud / fog
     if (code <= 86) return COL_RAIN;              // rain / snow
     return lv_color_hex(0xE12D39);                // storms
 }
 
+/* A rounded, non-scrolling rectangle used as the surface for tiles and rows. */
 static lv_obj_t *make_card(lv_obj_t *parent, lv_color_t colour)
 {
     lv_obj_t *card = lv_obj_create(parent);
@@ -183,6 +256,9 @@ static void set_glyph(lv_obj_t *label, int code)
 static void show_page(ui_page_t page);
 static void fill_day_page(void);
 
+/* Show one page and hide the rest, then restyle the nav bar and settings tabs
+ * to match. The Day page counts as part of Today for highlighting, and the
+ * settings pages light no nav button because they are not a tab. */
 static void show_page(ui_page_t page)
 {
     active_page = page;
@@ -204,11 +280,13 @@ static void show_page(ui_page_t page)
     }
 }
 
+/* Bottom-bar tab pressed; the page to show rides in the event's user data. */
 static void nav_event(lv_event_t *event)
 {
     show_page((ui_page_t)(intptr_t)lv_event_get_user_data(event));
 }
 
+/* Gear pressed in any header: open the settings (Location tab). */
 static void settings_event(lv_event_t *event)
 {
     LV_UNUSED(event);
@@ -224,6 +302,7 @@ static void settings_event(lv_event_t *event)
 /* Right-hand readouts stop short of both buttons. */
 #define HEADER_RIGHT_X (REFRESH_BTN_X + HOME_BTN_SIZE + 16)
 
+/* Refresh button pressed: ask the app for an immediate update. */
 static void refresh_event(lv_event_t *event)
 {
     LV_UNUSED(event);
@@ -311,6 +390,8 @@ static lv_obj_t *make_header(lv_obj_t *parent, lv_obj_t **title_out, lv_obj_t **
 
 /* ------------------------------------------------------------ today page --- */
 
+/* A day card on Today was tapped: fill and show that day's hourly page. The
+ * day index rides in the event's user data. Ignored until a forecast exists. */
 static void day_card_event(lv_event_t *event)
 {
     int day = (int)(intptr_t)lv_event_get_user_data(event);
@@ -322,6 +403,8 @@ static void day_card_event(lv_event_t *event)
     show_page(PAGE_DAY);
 }
 
+/* Today: current conditions card, four stat tiles and the tappable 5-day strip.
+ * Widgets are created empty; ui_set_weather() fills them. */
 static void build_today(lv_obj_t *page)
 {
     lv_obj_t *header = make_header(page, &lbl_place, &lbl_subtitle);
@@ -382,6 +465,7 @@ static void build_today(lv_obj_t *page)
 
 /* ----------------------------------------------------------- hourly page --- */
 
+/* Next 12 Hours: a temperature line chart over a row of hour cards. */
 static void build_hourly(lv_obj_t *page)
 {
     lv_obj_t *title = NULL;
@@ -400,7 +484,7 @@ static void build_hourly(lv_obj_t *page)
     lv_chart_set_div_line_count(chart, 4, 0);
     lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(chart, 0, 0);
-    lv_obj_set_style_line_color(chart, lv_color_hex(0x24405C), LV_PART_MAIN);
+    lv_obj_set_style_line_color(chart, COL_GRID, LV_PART_MAIN);
     lv_obj_set_style_size(chart, 8, 8, LV_PART_INDICATOR);
     chart_series = lv_chart_add_series(chart, COL_WARM, LV_CHART_AXIS_PRIMARY_Y);
 
@@ -441,7 +525,7 @@ static void build_day(lv_obj_t *page)
     lv_chart_set_div_line_count(day_chart, 3, 0);
     lv_obj_set_style_bg_opa(day_chart, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(day_chart, 0, 0);
-    lv_obj_set_style_line_color(day_chart, lv_color_hex(0x24405C), LV_PART_MAIN);
+    lv_obj_set_style_line_color(day_chart, COL_GRID, LV_PART_MAIN);
     lv_obj_set_style_size(day_chart, 6, 6, LV_PART_INDICATOR);
     day_series = lv_chart_add_series(day_chart, COL_WARM, LV_CHART_AXIS_PRIMARY_Y);
 
@@ -575,11 +659,85 @@ static void build_radar(lv_obj_t *page)
 
 /* The settings pages share a header of their own: home button, then a pair of
  * tabs, because both sections already use the full height below it. */
+static lv_obj_t *theme_labels[2];
+
+static bool same_color(lv_color_t a, lv_color_t b)
+{
+    return a.red == b.red && a.green == b.green && a.blue == b.blue;
+}
+
+/* Swap every locally styled palette colour under `obj` from one palette to
+ * the other, matching by exact value. Covers the idle and pressed states,
+ * which are the only selectors this UI styles. */
+static void recolor_tree(lv_obj_t *obj, const palette_t *from, const palette_t *to)
+{
+    static const lv_style_prop_t props[] = {
+        LV_STYLE_BG_COLOR, LV_STYLE_TEXT_COLOR, LV_STYLE_BORDER_COLOR, LV_STYLE_LINE_COLOR,
+    };
+    static const lv_style_selector_t selectors[] = { 0, LV_STATE_PRESSED };
+    const lv_color_t *old_colors = &from->bg;
+    const lv_color_t *new_colors = &to->bg;
+    const int count = (int)(sizeof(palette_t) / sizeof(lv_color_t));
+
+    for (size_t p = 0; p < sizeof(props) / sizeof(props[0]); ++p) {
+        for (size_t s = 0; s < sizeof(selectors) / sizeof(selectors[0]); ++s) {
+            lv_style_value_t value;
+            if (lv_obj_get_local_style_prop(obj, props[p], &value, selectors[s]) != LV_STYLE_RES_FOUND) {
+                continue;
+            }
+            for (int c = 0; c < count; ++c) {
+                if (same_color(value.color, old_colors[c])) {
+                    lv_style_value_t mapped = { .color = new_colors[c] };
+                    lv_obj_set_local_style_prop(obj, props[p], mapped, selectors[s]);
+                    break;
+                }
+            }
+        }
+    }
+
+    uint32_t children = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < children; ++i) {
+        recolor_tree(lv_obj_get_child(obj, i), from, to);
+    }
+}
+
+/* Switch between the dark and light palettes in place: remember the old set,
+ * load the new one, remap every styled colour in the widget tree, then fix the
+ * few things styles do not cover (chart series colour, the toggle label). */
+static void apply_theme(bool light)
+{
+    palette_t old = pal;
+    light_mode = light;
+    load_palette(&pal, light);
+
+    lv_obj_t *screen = lv_screen_active();
+    recolor_tree(screen, &old, &pal);
+    lv_chart_set_series_color(chart, chart_series, COL_WARM);
+    lv_chart_set_series_color(day_chart, day_series, COL_WARM);
+    for (int i = 0; i < 2; ++i) {
+        lv_label_set_text(theme_labels[i], light ? "Theme: Light" : "Theme: Dark");
+    }
+    lv_obj_invalidate(screen);
+}
+
+/* The theme toggle in the settings header was pressed. */
+static void theme_event(lv_event_t *event)
+{
+    LV_UNUSED(event);
+    apply_theme(!light_mode);
+    if (callbacks.on_theme != NULL) {
+        callbacks.on_theme(light_mode);
+    }
+}
+
 static void settings_tab_event(lv_event_t *event)
 {
     show_page((ui_page_t)(intptr_t)lv_event_get_user_data(event));
 }
 
+/* Header shared by the two settings pages: home button, the Location/Wi-Fi
+ * tabs, and the dark/light toggle on the right. `slot` (0 or 1) says which
+ * page this is, so each keeps its own tab and toggle widgets in sync. */
 static void make_settings_header(lv_obj_t *page, int slot)
 {
     lv_obj_t *header = lv_obj_create(page);
@@ -613,6 +771,21 @@ static void make_settings_header(lv_obj_t *page, int slot)
         lv_obj_center(make_label(tab, tab_names[i], &lv_font_montserrat_18, COL_TEXT));
         settings_tabs[slot][i] = tab;
     }
+
+    /* Dark / light switch, right-aligned. Labelled with the current mode;
+     * tapping it flips. */
+    lv_obj_t *theme = lv_button_create(header);
+    lv_obj_remove_style_all(theme);
+    lv_obj_set_size(theme, THEME_BTN_W, 48);
+    lv_obj_align(theme, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(theme, COL_CARD, 0);
+    lv_obj_set_style_bg_opa(theme, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(theme, COL_ACCENT, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(theme, 12, 0);
+    lv_obj_add_event_cb(theme, theme_event, LV_EVENT_CLICKED, NULL);
+    theme_labels[slot] = make_label(theme, "", &lv_font_montserrat_18, COL_TEXT);
+    lv_obj_center(theme_labels[slot]);
+    lv_label_set_text(theme_labels[slot], light_mode ? "Theme: Light" : "Theme: Dark");
 }
 
 /* Highlight whichever settings tab matches the visible page. */
@@ -635,6 +808,8 @@ static void style_settings_tabs(ui_page_t page)
 
 /* --------------------------------------------------------- location page --- */
 
+/* Redraw the ZIP entry from zip_entry: digits spaced out, the hint text, and
+ * the Save button enabled only when all five digits are present. */
 static void refresh_zip_view(void)
 {
     char spaced[ZIP_LEN * 2 + 1] = { 0 };
@@ -659,6 +834,8 @@ static void refresh_zip_view(void)
     lv_obj_set_style_text_color(lbl_zip_hint, COL_MUTED, 0);
 }
 
+/* Keypad press. The key's text rides in the user data: a digit appends,
+ * "<" deletes the last digit and "C" clears the entry. */
 static void key_event(lv_event_t *event)
 {
     const char *key = (const char *)lv_event_get_user_data(event);
@@ -677,6 +854,8 @@ static void key_event(lv_event_t *event)
     refresh_zip_view();
 }
 
+/* Save pressed: hand the complete ZIP to the app, which looks it up and saves
+ * the location. Does nothing until five digits are entered. */
 static void save_event(lv_event_t *event)
 {
     LV_UNUSED(event);
@@ -688,12 +867,13 @@ static void save_event(lv_event_t *event)
     callbacks.on_zip_submit(zip_entry);
 }
 
+/* Location settings: ZIP display, Save button and a 3x4 numeric keypad. */
 static void build_location(lv_obj_t *page)
 {
     make_settings_header(page, 0);
 
     lbl_current_loc = make_label(page, "", &lv_font_montserrat_16, COL_MUTED);
-    lv_obj_align(lbl_current_loc, LV_ALIGN_TOP_RIGHT, 0, 22);
+    lv_obj_align(lbl_current_loc, LV_ALIGN_TOP_RIGHT, -SETTINGS_RIGHT_X, 22);
 
     /* ZIP field */
     lv_obj_t *field_label = make_label(page, "ZIP CODE", &lv_font_montserrat_14, COL_MUTED);
@@ -702,7 +882,7 @@ static void build_location(lv_obj_t *page)
     lv_obj_t *field = make_card(page, COL_CARD);
     lv_obj_set_size(field, 452, 96);
     lv_obj_set_pos(field, 0, HEADER_H + GAP + 28);
-    lv_obj_set_style_border_color(field, lv_color_hex(0x2A4A6A), 0);
+    lv_obj_set_style_border_color(field, COL_BORDER, 0);
     lv_obj_set_style_border_width(field, 2, 0);
 
     lbl_zip = make_label(field, "", &lv_font_montserrat_44, COL_TEXT);
@@ -746,12 +926,15 @@ static void build_location(lv_obj_t *page)
 
 /* ------------------------------------------------------------- wifi page --- */
 
+/* Cancel pressed in the password dialog. */
 static void modal_close(lv_event_t *event)
 {
     LV_UNUSED(event);
     lv_obj_add_flag(modal, LV_OBJ_FLAG_HIDDEN);
 }
 
+/* Connect pressed in the password dialog: pass the network and password to the
+ * app, which tries to join and saves them only if it succeeds. */
 static void modal_connect(lv_event_t *event)
 {
     LV_UNUSED(event);
@@ -814,6 +997,8 @@ static void build_modal(lv_obj_t *screen)
     lv_keyboard_set_textarea(keyboard, modal_field);
 }
 
+/* A network row was tapped: open the password dialog for it. The SSID rides in
+ * the event's user data. */
 static void wifi_pick_event(lv_event_t *event)
 {
     const char *ssid = (const char *)lv_event_get_user_data(event);
@@ -824,6 +1009,8 @@ static void wifi_pick_event(lv_event_t *event)
     lv_obj_move_foreground(modal);
 }
 
+/* Scan pressed: show progress and ask the app to scan. The app calls
+ * ui_set_wifi_list() with the results. */
 static void wifi_scan_event(lv_event_t *event)
 {
     LV_UNUSED(event);
@@ -841,7 +1028,7 @@ static void build_wifi(lv_obj_t *page)
     lv_obj_t *scan = lv_button_create(page);
     lv_obj_remove_style_all(scan);
     lv_obj_set_size(scan, 180, 56);
-    lv_obj_align(scan, LV_ALIGN_TOP_RIGHT, 0, 4);
+    lv_obj_align(scan, LV_ALIGN_TOP_RIGHT, -SETTINGS_RIGHT_X, 4);
     lv_obj_set_style_bg_color(scan, COL_ACCENT, 0);
     lv_obj_set_style_bg_opa(scan, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(scan, 14, 0);
@@ -866,10 +1053,13 @@ static void build_wifi(lv_obj_t *page)
 
 /* ------------------------------------------------------------------ api --- */
 
+/* Build every page, the password dialog and the bottom nav bar, then show
+ * Today. Call once, with the LVGL lock held, after ui_set_light_mode(). */
 void ui_create(const ui_callbacks_t *cb)
 {
     callbacks = *cb;
     zip_entry[0] = '\0';
+    load_palette(&pal, light_mode);
 
     lv_obj_t *screen = lv_screen_active();
     lv_obj_set_style_bg_color(screen, COL_BG, 0);
@@ -921,6 +1111,7 @@ void ui_create(const ui_callbacks_t *cb)
     ESP_LOGI(TAG, "UI built: 3 pages at %dx%d", PAGE_W, PAGE_H);
 }
 
+/* Status text on the right of the Today header ("Updating...", "Update failed"). */
 void ui_set_status(const char *text)
 {
     if (lvgl_port_lock(1000)) {
@@ -930,6 +1121,8 @@ void ui_set_status(const char *text)
     }
 }
 
+/* Show the place name (and ZIP, when known) on Today, Next 12 Hours and the
+ * Location screen. */
 void ui_set_location(const char *place, const char *zip)
 {
     if (lvgl_port_lock(1000)) {
@@ -956,7 +1149,7 @@ void ui_set_location(const char *place, const char *zip)
         } else {
             lv_label_set_text(lbl_current_loc, place);
         }
-        lv_obj_align(lbl_current_loc, LV_ALIGN_RIGHT_MID, -HEADER_RIGHT_X, 0);
+        lv_obj_align(lbl_current_loc, LV_ALIGN_TOP_RIGHT, -SETTINGS_RIGHT_X, 22);
         lvgl_port_unlock();
     }
 }
@@ -1051,6 +1244,7 @@ void ui_set_wifi_list(const wifi_ap_t *networks, int count)
     lvgl_port_unlock();
 }
 
+/* One-line status under the Wi-Fi list; `is_error` turns it red. */
 void ui_set_wifi_status(const char *text, bool is_error)
 {
     if (!lvgl_port_lock(1000)) {
@@ -1063,6 +1257,8 @@ void ui_set_wifi_status(const char *text, bool is_error)
     lvgl_port_unlock();
 }
 
+/* Show which network we are joined to, and remember it so scan results can
+ * mark that row. */
 void ui_set_wifi_current(const char *ssid, bool connected)
 {
     if (!lvgl_port_lock(1000)) {
@@ -1091,6 +1287,7 @@ void ui_show_wifi_settings(void)
     }
 }
 
+/* Message under the ZIP field ("Saved", "ZIP not found"); `is_error` turns it red. */
 void ui_set_zip_hint(const char *text, bool is_error)
 {
     if (lvgl_port_lock(1000)) {
@@ -1101,6 +1298,8 @@ void ui_set_zip_hint(const char *text, bool is_error)
     }
 }
 
+/* Fill Today, Next 12 Hours and the Day page from a forecast. A copy is kept so
+ * a tapped day can be shown later, and an open Day page updates in place. */
 void ui_set_weather(const weather_data_t *data)
 {
     if (!data->valid || !lvgl_port_lock(1000)) {
@@ -1170,4 +1369,11 @@ void ui_set_weather(const weather_data_t *data)
     }
 
     lvgl_port_unlock();
+}
+
+/* Choose the starting theme. Call before ui_create(); afterwards the on-screen
+ * toggle changes it through apply_theme(). */
+void ui_set_light_mode(bool light)
+{
+    light_mode = light;   // before ui_create(); the switch on screen uses apply_theme()
 }

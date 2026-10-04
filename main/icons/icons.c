@@ -1,5 +1,9 @@
 #include "icons.h"
 
+/* Hand-maintained mapping from weather codes to glyphs. The glyph defines come
+ * from the generated wi_glyphs.h; do not edit that file, edit
+ * tools/weather_icons.txt and regenerate. */
+
 /* WMO weather codes, per Open-Meteo:
  *   0        clear
  *   1-2      mainly clear / partly cloudy

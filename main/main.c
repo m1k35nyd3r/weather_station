@@ -1,3 +1,21 @@
+/* Weather Station: application entry point and orchestration.
+ *
+ * This file owns everything that touches hardware or ties the modules together:
+ *   - bring-up of the JD9165 MIPI-DSI panel and the GT911 touch controller
+ *   - Wi-Fi through the ESP32-C6 co-processor (ESP-Hosted) and SNTP time
+ *   - the weather task, which refreshes forecast and radar on a schedule, on a
+ *     ZIP change, or when the refresh button is pressed
+ *   - the callbacks the UI uses to hand work to that task
+ *
+ * Threading model: LVGL runs in its own task. UI callbacks (on_*) therefore
+ * only set a flag and return; the weather task polls those flags and does the
+ * slow network work. Anything that touches widgets from another task goes
+ * through the ui_set_*() functions, which take the LVGL lock themselves.
+ *
+ * Module map:  ui.c (screens)  weather.c (forecast, ZIP, location in NVS)
+ *              radar.c (NOAA image)  backlight.c (brightness)  wifi_cfg.c
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -68,8 +86,13 @@
 #define WEATHER_SKEW_S     20
 
 static const char *TAG = "weather_station";
+/* Bit WIFI_CONNECTED_BIT is set while the station has an IP address. */
 static EventGroupHandle_t wifi_events;
+/* The active location, loaded from NVS at boot and replaced on a ZIP change. */
 static weather_location_t location;
+
+/* Requests from the UI to the weather task. The UI callbacks only set these
+ * (and fill the matching request struct); the weather task acts on them. */
 static volatile bool zip_request_pending;
 static volatile bool refresh_request_pending;
 static char zip_request[WEATHER_ZIP_LEN];
@@ -147,6 +170,11 @@ static const jd9165_lcd_init_cmd_t jd9165_qd070as01_init[] = {
     {0x29, NULL, 0, 20},                // display on
 };
 
+/* Bring up the backlight, the MIPI-DSI link, the JD9165 panel and LVGL.
+ * Order matters: the DSI PHY needs its LDO rail before the bus is created, and
+ * the panel needs the vendor init sequence above before it will light. Returns
+ * the panel handle through `panel_out`. Failures here are fatal (ESP_ERROR_CHECK)
+ * because there is nothing useful to run without a display. */
 static esp_err_t init_display(esp_lcd_panel_handle_t *panel_out)
 {
     /* LEDC PWM rather than a plain output: the pin drives the MP3202's EN
@@ -250,6 +278,9 @@ static esp_err_t init_display(esp_lcd_panel_handle_t *panel_out)
 
 /* ------------------------------------------------------------------ wifi --- */
 
+/* Keeps the station associated: connect on start, reconnect on every drop, and
+ * publish the connected state through the event group so tasks can wait on it.
+ * Runs on the default event loop task, so it must stay short. */
 #if CONFIG_ESP_WIFI_REMOTE_ENABLED
 static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
 {
@@ -264,6 +295,10 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
 }
 #endif
 
+/* Initialise Wi-Fi (hosted on the ESP32-C6), stage any saved credentials and
+ * start the station. With no credentials it still starts, because scanning
+ * needs a running station, and opens the Wi-Fi settings screen so the user can
+ * pick a network. Without the hosted backend it only reports the problem. */
 static void wifi_start(void)
 {
     wifi_events = xEventGroupCreate();
@@ -310,6 +345,9 @@ static void wifi_start(void)
 #endif
 }
 
+/* Start SNTP and wait up to 10 s for the first sync. The clock is kept in UTC;
+ * everything that needs local time derives it from the forecast's offset. A
+ * timeout is not fatal: SNTP keeps retrying in the background. */
 static void clock_start(void)
 {
     esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
@@ -523,24 +561,58 @@ static void init_touch(esp_lcd_panel_handle_t panel)
 
 /* ------------------------------------------------------------------- app --- */
 
-/* All three run in the LVGL task and must not block it, so they only record
- * the request; the weather task does the network work. */
+/* Dark/light preference lives in its own NVS namespace so it survives
+ * reflashing like the Wi-Fi and location settings do. */
+#define UI_PREFS_NS    "ui_prefs"
+#define UI_PREFS_LIGHT "light"
+
+/* Read the saved theme: true for light mode. Defaults to dark if never set. */
+static bool theme_load(void)
+{
+    nvs_handle_t handle;
+    uint8_t light = 0;
+    if (nvs_open(UI_PREFS_NS, NVS_READONLY, &handle) == ESP_OK) {
+        nvs_get_u8(handle, UI_PREFS_LIGHT, &light);
+        nvs_close(handle);
+    }
+    return light != 0;
+}
+
+/* UI callback: persist the user's dark/light choice. The UI has already
+ * switched; this only remembers it for the next boot. */
+static void on_theme(bool light)
+{
+    nvs_handle_t handle;
+    if (nvs_open(UI_PREFS_NS, NVS_READWRITE, &handle) == ESP_OK) {
+        nvs_set_u8(handle, UI_PREFS_LIGHT, light ? 1 : 0);
+        nvs_commit(handle);
+        nvs_close(handle);
+    }
+}
+
+/* The callbacks below run in the LVGL task and must not block it, so they only
+ * record the request; the weather task does the network work. */
+
+/* UI callback: the refresh button was pressed. */
 static void on_refresh(void)
 {
     refresh_request_pending = true;
 }
 
+/* UI callback: a five-digit ZIP was submitted from the Location screen. */
 static void on_zip_submit(const char *zip)
 {
     snprintf(zip_request, sizeof(zip_request), "%s", zip);
     zip_request_pending = true;
 }
 
+/* UI callback: the Scan button was pressed on the Wi-Fi screen. */
 static void on_wifi_scan(void)
 {
     wifi_scan_pending = true;
 }
 
+/* UI callback: a network and password were entered in the connect dialog. */
 static void on_wifi_submit(const char *ssid, const char *password)
 {
     snprintf(wifi_request.ssid, sizeof(wifi_request.ssid), "%s", ssid);
@@ -577,6 +649,9 @@ static int seconds_until_next(const weather_data_t *data)
  * refresh. Replaced wholesale on the next successful fetch. */
 static radar_image_t radar_image;
 
+/* Fetch a fresh radar image for `loc` and hand it to the UI. On failure the
+ * previous image stays on screen. Called from radar_task, or inline when the
+ * task could not be started; it is the only writer of radar_image. */
 static void refresh_radar(const weather_location_t *loc)
 {
     radar_image_t fresh = { 0 };
@@ -616,6 +691,10 @@ static void radar_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Refresh everything now and return the seconds until the next scheduled
+ * refresh. The radar is fetched on its own task while the forecast loads, then
+ * joined (with a time limit) before returning. Safe to call for any trigger:
+ * the schedule, a new ZIP, or the refresh button. */
 static int refresh_now(weather_data_t *data)
 {
     if (!weather_location_is_set(&location)) {
@@ -670,6 +749,10 @@ static int refresh_now(weather_data_t *data)
     return wait;
 }
 
+/* The long-running task behind the whole app. It waits for Wi-Fi, starts the
+ * clock, refreshes on schedule, and services the requests the UI raises: Wi-Fi
+ * scan, Wi-Fi credentials, ZIP change and manual refresh. Polls every 250 ms,
+ * so the UI feels immediate without needing a queue. */
 static void weather_task(void *arg)
 {
     LV_UNUSED(arg);
@@ -770,6 +853,9 @@ static void weather_task(void *arg)
     }
 }
 
+/* Boot sequence: NVS, UTC clock, display and touch, saved location and theme,
+ * the UI, Wi-Fi, then the weather task. The UI exists before Wi-Fi starts so
+ * status messages and the Wi-Fi settings screen have somewhere to appear. */
 void app_main(void)
 {
     esp_err_t nvs_error = nvs_flash_init();
@@ -794,7 +880,9 @@ void app_main(void)
         .on_wifi_scan = on_wifi_scan,
         .on_wifi_submit = on_wifi_submit,
         .on_refresh = on_refresh,
+        .on_theme = on_theme,
     };
+    ui_set_light_mode(theme_load());
     if (lvgl_port_lock(1000)) {
         ui_create(&ui_cb);
         /* LVGL owns the input timestamps, so the idle watcher lives on an

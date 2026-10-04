@@ -1,3 +1,5 @@
+/* Forecast, ZIP lookup and saved-location types and calls. See weather.c. */
+
 #pragma once
 
 #include <stdbool.h>

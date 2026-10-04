@@ -1,3 +1,6 @@
+/* Public interface to the screens. Callbacks flow out of the UI to the app;
+ * the ui_set_*() functions push data in. See ui.c. */
+
 #pragma once
 
 #include <stdbool.h>
@@ -10,6 +13,7 @@
 typedef void (*ui_zip_submit_cb_t)(const char *zip);
 typedef void (*ui_wifi_scan_cb_t)(void);
 typedef void (*ui_refresh_cb_t)(void);
+typedef void (*ui_theme_cb_t)(bool light);
 typedef void (*ui_wifi_submit_cb_t)(const char *ssid, const char *password);
 
 typedef struct {
@@ -17,7 +21,11 @@ typedef struct {
     ui_wifi_scan_cb_t on_wifi_scan;
     ui_wifi_submit_cb_t on_wifi_submit;
     ui_refresh_cb_t on_refresh;
+    ui_theme_cb_t on_theme;   /* called after the user flips dark/light */
 } ui_callbacks_t;
+
+/* Choose the starting theme. Call before ui_create(). */
+void ui_set_light_mode(bool light);
 
 /* Build all three screens. Must be called with the LVGL lock held. */
 void ui_create(const ui_callbacks_t *callbacks);

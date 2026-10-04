@@ -1,3 +1,14 @@
+/* Weather data: Open-Meteo forecast fetch and parse, ZIP-to-coordinates lookup
+ * (Zippopotam), and the saved location in NVS.
+ *
+ * Neither service needs an API key. One forecast request returns the current
+ * conditions, five daily summaries and every hourly sample for those days, so
+ * the Next 12 Hours strip, the 5-day strip and the per-day pages all come from
+ * a single fetch. Times in the response are local to the forecast location and
+ * the device clock is UTC, so they are converted with the response's own
+ * utc_offset_seconds.
+ */
+
 #include "weather.h"
 
 #include <stdio.h>
@@ -13,12 +24,16 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+/* Size of the PSRAM buffer for the forecast body; comfortably holds the 5-day
+ * response with hourly data. */
 #define RESPONSE_SIZE   24576
+/* The location is stored as one blob so ZIP, name and coordinates stay together. */
 #define NVS_NAMESPACE   "weather"
 #define NVS_KEY_LOC     "location"
 
 static const char *TAG = "weather";
 
+/* Plain-English description of a WMO weather code (see icons.c for the ranges). */
 const char *weather_describe(int code)
 {
     if (code == 0) return "Clear sky";
@@ -91,6 +106,9 @@ cleanup:
 
 /* ------------------------------------------------------------ location --- */
 
+/* Start from the Kconfig fallback coordinates, then overlay whatever was saved
+ * from the Location screen. The stored blob is size-checked and re-terminated
+ * before use, so a layout change cannot yield a runaway string. */
 void weather_location_load(weather_location_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -115,12 +133,15 @@ void weather_location_load(weather_location_t *out)
     nvs_close(handle);
 }
 
+/* A location counts as set once there is a ZIP or non-zero coordinates, so a
+ * blank Kconfig never causes a fetch for 0N 0E. */
 bool weather_location_is_set(const weather_location_t *location)
 {
     return location->zip[0] != '\0' ||
            location->latitude != 0.0f || location->longitude != 0.0f;
 }
 
+/* Persist the location to NVS (survives reboots and reflashing). */
 esp_err_t weather_location_save(const weather_location_t *location)
 {
     nvs_handle_t handle;
@@ -189,6 +210,7 @@ esp_err_t weather_lookup_zip(const char *zip, weather_location_t *out)
 
 /* ------------------------------------------------------------- forecast --- */
 
+/* "YYYY-MM-DD" -> "MON". Uses mktime only to find the weekday. */
 static void format_day_label(const char *iso_date, char *out, size_t out_size)
 {
     // iso_date is "YYYY-MM-DD".
@@ -211,6 +233,7 @@ static void format_day_label(const char *iso_date, char *out, size_t out_size)
     }
 }
 
+/* "YYYY-MM-DDTHH:MM" -> "4 PM" (12 AM / 12 PM for midnight / noon). */
 static void format_hour_label(const char *iso_time, char *out, size_t out_size)
 {
     // iso_time is "YYYY-MM-DDTHH:MM".
@@ -273,12 +296,21 @@ static int first_future_hour(cJSON *times, int utc_offset)
     return 0;
 }
 
+/* array[index] as a float, or `fallback` if it is missing or not a number. */
 static float json_number(cJSON *array, int index, float fallback)
 {
     cJSON *entry = cJSON_GetArrayItem(array, index);
     return cJSON_IsNumber(entry) ? (float)entry->valuedouble : fallback;
 }
 
+/* Fetch and parse the forecast for `location` into `out`.
+ *
+ * Fills: current conditions; five daily summaries with today's sunrise/sunset;
+ * the next 12 hours from now (hours[]); every hour of each day (day_hours[]);
+ * the UTC offset; and when the source says its next sample lands, so the caller
+ * can schedule the following fetch. The response body is held in PSRAM and freed
+ * as soon as it is parsed. Check the return value: after a network failure `out`
+ * is untouched, and the caller marks its copy invalid. */
 esp_err_t weather_fetch(const weather_location_t *location, weather_data_t *out)
 {
     char *response = heap_caps_malloc(RESPONSE_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);

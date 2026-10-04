@@ -1,3 +1,5 @@
+/* Saved Wi-Fi credentials, scanning and applying them. See wifi_cfg.c. */
+
 #pragma once
 
 #include <stdbool.h>
@@ -26,6 +28,7 @@ void wifi_cfg_load(wifi_creds_t *out);
 /* True once an SSID exists from either source. */
 bool wifi_cfg_is_set(const wifi_creds_t *creds);
 
+/* Persist credentials to NVS. Call only after a successful connection. */
 esp_err_t wifi_cfg_save(const wifi_creds_t *creds);
 
 /* Blocking scan. Returns networks sorted strongest first, duplicates removed. */

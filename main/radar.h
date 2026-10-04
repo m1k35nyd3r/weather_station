@@ -1,3 +1,5 @@
+/* NOAA radar image fetch. See radar.c. */
+
 #pragma once
 
 #include <stdbool.h>

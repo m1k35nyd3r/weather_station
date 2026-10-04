@@ -1,3 +1,10 @@
+/* Wi-Fi configuration helpers: saved credentials (NVS), scanning, and applying
+ * credentials to the station. The radio itself is on the ESP32-C6 and reached
+ * through ESP-Hosted, so every esp_wifi_* call here is an RPC to that chip.
+ * When the hosted backend is compiled out, the scan/apply calls are stubs that
+ * return ESP_ERR_NOT_SUPPORTED so the rest of the app still builds.
+ */
+
 #include "wifi_cfg.h"
 
 #include <stdlib.h>
@@ -8,12 +15,15 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+/* Same namespace as the saved location; SSID and password are separate keys. */
 #define NVS_NAMESPACE "weather"
 #define NVS_KEY_SSID  "wifi_ssid"
 #define NVS_KEY_PASS  "wifi_pass"
 
 static const char *TAG = "wifi_cfg";
 
+/* Saved credentials win over the Kconfig defaults; a stored SSID with no stored
+ * password means an open network. */
 void wifi_cfg_load(wifi_creds_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -42,11 +52,14 @@ void wifi_cfg_load(wifi_creds_t *out)
     nvs_close(handle);
 }
 
+/* True once an SSID exists from either source. */
 bool wifi_cfg_is_set(const wifi_creds_t *creds)
 {
     return creds->ssid[0] != '\0';
 }
 
+/* Persist credentials to NVS. Called only after a connection succeeds, so a
+ * typo never replaces working credentials. */
 esp_err_t wifi_cfg_save(const wifi_creds_t *creds)
 {
     nvs_handle_t handle;
@@ -71,6 +84,8 @@ esp_err_t wifi_cfg_save(const wifi_creds_t *creds)
 
 #if CONFIG_ESP_WIFI_REMOTE_ENABLED
 
+/* Blocking active scan. Keeps the first (strongest) sighting of each SSID,
+ * skips hidden networks, and caps the results at `max`. */
 esp_err_t wifi_cfg_scan(wifi_ap_t *out, int max, int *found)
 {
     *found = 0;
@@ -135,6 +150,8 @@ esp_err_t wifi_cfg_scan(wifi_ap_t *out, int max, int *found)
     return ESP_OK;
 }
 
+/* Stage credentials in the station config without connecting. WPA2 is required
+ * when a password is present; no password selects an open network. */
 esp_err_t wifi_cfg_set_config(const wifi_creds_t *creds)
 {
     /* sta.ssid and sta.password are fixed-width and not NUL-terminated: a
@@ -152,6 +169,7 @@ esp_err_t wifi_cfg_set_config(const wifi_creds_t *creds)
     return esp_wifi_set_config(WIFI_IF_STA, &config);
 }
 
+/* Stage credentials and connect on the running station. */
 esp_err_t wifi_cfg_apply(const wifi_creds_t *creds, bool disconnect_first)
 {
     if (disconnect_first) {

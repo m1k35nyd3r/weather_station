@@ -1,3 +1,16 @@
+/* Screen brightness. The backlight is driven by LEDC PWM (the board wires the
+ * pin to the boost driver's enable input), faded in hardware where possible.
+ *
+ * The idle watcher, an LVGL timer running once a second, chooses a level from:
+ *   1. quiet hours (1-7am local): off, unless touched in the last minute
+ *   2. night (before sunrise / after sunset): dim
+ *   3. otherwise day levels
+ * with a lower level for each once the screen has been idle for a while. Touch
+ * is detected through LVGL's own inactivity clock, so no extra input hook is
+ * needed. Time-based rules switch off until the clock and forecast are known,
+ * so a failed fetch can never leave the screen unexpectedly dark.
+ */
+
 #include "backlight.h"
 
 #include "driver/ledc.h"
@@ -28,6 +41,7 @@ static int utc_offset_s;
 static bool utc_offset_known;
 static bool was_quiet;
 
+/* Set up the LEDC timer and channel on `gpio` at full brightness. */
 esp_err_t backlight_init(int gpio)
 {
     const ledc_timer_config_t timer = {
@@ -63,6 +77,7 @@ esp_err_t backlight_init(int gpio)
     return ESP_OK;
 }
 
+/* Fade to `percent` (clamped to 0-100). A no-op if already there. */
 void backlight_set(int percent)
 {
     if (percent < 0) {
@@ -85,23 +100,28 @@ void backlight_set(int percent)
     }
 }
 
+/* The level most recently requested, in percent. */
 int backlight_get(void)
 {
     return current_percent;
 }
 
+/* Store today's sunrise and sunset (UTC epochs) for the night test. */
 void backlight_set_sun_times(time_t sunrise, time_t sunset)
 {
     sunrise_utc = sunrise;
     sunset_utc = sunset;
 }
 
+/* Store the location's UTC offset so local hour-of-day can be computed. */
 void backlight_set_utc_offset(int seconds)
 {
     utc_offset_s = seconds;
     utc_offset_known = true;
 }
 
+/* True when local time is within [QUIET_START_HOUR, QUIET_END_HOUR). Needs both
+ * a plausible clock and a known offset, otherwise false (fail-safe: lit). */
 bool backlight_is_quiet_hours(void)
 {
     time_t now = time(NULL);
@@ -116,6 +136,8 @@ bool backlight_is_quiet_hours(void)
     return hour >= BACKLIGHT_QUIET_START_HOUR && hour < BACKLIGHT_QUIET_END_HOUR;
 }
 
+/* True before today's sunrise or after its sunset. False until the clock and
+ * both sun times are known. */
 bool backlight_is_night(void)
 {
     time_t now = time(NULL);
@@ -165,6 +187,7 @@ static void idle_timer_cb(lv_timer_t *timer)
     }
 }
 
+/* Create the once-a-second timer that applies the brightness rules. */
 void backlight_start_idle_watch(void)
 {
     lv_timer_create(idle_timer_cb, 1000, NULL);

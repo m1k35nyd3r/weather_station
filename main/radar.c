@@ -1,3 +1,12 @@
+/* Radar: fetches a single composited PNG from NOAA's GeoServer (WMS).
+ *
+ * One request returns the base-reflectivity mosaic already drawn over state
+ * outlines, centred exactly on the saved location, so there is no tile maths and
+ * no basemap to store. The bytes are kept as PNG in PSRAM and decoded lazily by
+ * LVGL's lodepng when the page is drawn. NOAA covers the US only, which matches
+ * the ZIP-based location design.
+ */
+
 #include "radar.h"
 
 #include <math.h>
@@ -31,6 +40,7 @@
 
 static const char *TAG = "radar";
 
+/* Release the PNG buffer and mark the image empty. Safe to call twice. */
 void radar_free(radar_image_t *image)
 {
     if (image->png != NULL) {
@@ -41,6 +51,13 @@ void radar_free(radar_image_t *image)
     image->valid = false;
 }
 
+/* Request a radar image centred on `location` and store it in `out`.
+ *
+ * Builds a WMS GetMap bounding box around the location (longitude widened for
+ * the map projection and the image aspect), downloads the PNG into PSRAM, and
+ * verifies the PNG signature because GeoServer reports errors as XML with a 200
+ * status. Logs open/wait/body timings. Any previous image in `out` is freed
+ * first; on failure `out` is left empty. */
 esp_err_t radar_fetch(const weather_location_t *location, radar_image_t *out)
 {
     radar_free(out);

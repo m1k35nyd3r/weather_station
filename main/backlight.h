@@ -1,3 +1,5 @@
+/* Backlight control and the brightness rules (day/night/idle/quiet hours). See backlight.c. */
+
 #pragma once
 
 #include <stdbool.h>
