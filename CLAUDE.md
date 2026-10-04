@@ -16,10 +16,14 @@ Display current weather for the configured location on a wall-mounted panel.
 
 Three tabs along the bottom, plus settings behind a gear icon:
 
-- **Today** — current conditions, stat tiles, 5-day strip
-- **Hourly** — 12-hour temperature chart and per-hour cards
-- **Radar** — full-bleed precipitation radar centred on the location
+- **Today** — current conditions, stat tiles, 5-day strip; tapping a day opens **Day**
+- **Next 12 Hours** — 12-hour temperature chart and per-hour cards
+- **Current Radar** — full-bleed precipitation radar centred on the location
+- **Day** — all 24 hours of one forecast day (not a tab; opened from Today)
 - **Settings** — two tabs behind the gear: Location (ZIP keypad) and Wi-Fi (scan, password entry)
+
+Page headers have home, refresh and gear buttons. The screen is off from
+1:00 to 7:00 local unless touched (`main/backlight.c`).
 
 ## Build
 
@@ -45,6 +49,10 @@ either have no console or drop off the bus on reset.
 - Labels can only render ASCII, `°` and `LV_SYMBOL_*`. Anything else is a box.
 - Generated files (`main/icons/weather_font_*.c`, `wi_glyphs.h`) carry a
   "do not edit" banner; change `tools/weather_icons.txt` and regenerate.
+- The device clock is UTC. Local time comes from the forecast's
+  `utc_offset_seconds` (`weather_data_t`), never from `TZ`.
+- Weather and radar are fetched in parallel in `refresh_now()`; the radar wait
+  is bounded and its job is static. Do not make it unbounded or stack-allocated.
 - Verify changes reached the device, not just that the build succeeded:
   check the symbol in `build/config/sdkconfig.h` and the
   `Hash of data verified` lines from esptool.

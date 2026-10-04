@@ -3,14 +3,20 @@
 An ESP-IDF application for the Guiffion **JC1060P470C** — an ESP32-P4 with a
 7" 1024x600 JD9165 MIPI-DSI display and a GT911 capacitive touch panel.
 
-Four screens, driven by touch:
+Five screens, driven by touch. The bottom bar has three tabs:
 
 | Screen | Contents |
 | --- | --- |
-| **Today** | Current temperature and conditions, humidity / wind / rain chance / feels-like, and a 5-day strip |
-| **Hourly** | 12-hour temperature chart plus per-hour cards with rain probability |
-| **Radar** | Full-bleed live precipitation radar centred on your location, with state outlines |
+| **Today** | Current temperature and conditions, humidity / wind / rain chance / feels-like, and a 5-day strip. **Tap a day** to open its hour-by-hour page |
+| **Next 12 Hours** | 12-hour temperature chart plus per-hour cards with rain probability |
+| **Current Radar** | Full-bleed live precipitation radar centred on your location, with state outlines |
+| **Day** | Opened from a Today day card: all 24 hours of that day as a temperature line over two rows of hour cards (temperature and rain chance). The home button returns to Today |
 | **Settings** | Two tabs behind the gear icon: **Location** (ZIP keypad) and **Wi-Fi** (network scan and password entry) |
+
+The header on Today, Next 12 Hours and Day has a **home** button on the left and,
+on the right, a **refresh** button next to the **gear**. Refresh asks for an
+immediate weather and radar update; otherwise the device refreshes on the
+forecast's own 15-minute cadence.
 
 Weather comes from [Open-Meteo](https://open-meteo.com/), radar from NOAA's
 GeoServer, and ZIP-to-coordinates from [Zippopotam](https://www.zippopotam.us/).
@@ -144,6 +150,50 @@ why `wifi_cfg_apply()` takes an explicit `disconnect_first`.
 
 ---
 
+## Screen brightness
+
+Brightness is set in `main/backlight.c` from the time of day and from touch. The
+clock is kept in UTC, so local time comes from the `utc_offset_seconds` in each
+forecast (which also tracks daylight saving).
+
+| Condition | Brightness |
+| --- | --- |
+| Day, touched in the last 10 min | 100% |
+| Day, idle | 12% |
+| Night (after sunset, before sunrise), touched | 25% |
+| Night, idle | 4% |
+| **Quiet hours, 1:00 to 7:00 local** | **0% (off)** |
+| Quiet hours, just touched | 25% for 60 s, then off again |
+
+Quiet hours are `BACKLIGHT_QUIET_*` in `backlight.h`. They stay off until SNTP has
+set the clock *and* a forecast has supplied the offset, so a failed fetch at boot
+can never blank the screen in the daytime. The touch panel keeps scanning while
+the screen is dark, so the first touch wakes it and is also delivered to the UI:
+a tap that lands on a button will press it.
+
+---
+
+## Refresh behaviour
+
+`refresh_now()` in `main.c` fetches the forecast and the radar **in parallel**:
+they go to different hosts and do not depend on each other, so the radar runs on
+a short-lived task while the weather request proceeds. Waiting for the radar is
+bounded (90 s) so a stalled request cannot freeze weather updates, and a new
+radar fetch will not start while an old one is still running.
+
+Each refresh logs its timings, which is the first place to look when something
+feels slow:
+
+```text
+radar: radar timing: open 369 ms, wait 228 ms, body 404 ms
+weather_station: weather fetch took 1461 ms
+```
+
+`open` is DNS + TCP + TLS, `wait` is the server rendering the image, `body` is
+the download. A refresh button press logs `manual refresh requested`.
+
+---
+
 ## Board pin map
 
 Confirmed from the schematics in `docs/JC1060P470C_I_W/5-Schematic/`:
@@ -163,9 +213,11 @@ Confirmed from the schematics in `docs/JC1060P470C_I_W/5-Schematic/`:
 ```text
 main/
   main.c        hardware bring-up, Wi-Fi, SNTP, refresh task
-  ui.c/.h       all four screens, navigation, data binding
-  weather.c/.h  Open-Meteo fetch/parse, ZIP lookup, NVS persistence
+  ui.c/.h       all five screens, navigation, data binding
+  weather.c/.h  Open-Meteo fetch/parse (current, daily, hourly, per-day hours),
+                ZIP lookup, NVS persistence
   radar.c/.h    NOAA WMS radar fetch
+  backlight.c/.h  PWM brightness: day/night/idle levels and 1-7am quiet hours
   wifi_cfg.c/.h network scan, credential storage in NVS
   icons/        Weather Icons fonts (generated) + WMO code mapping
 tools/
