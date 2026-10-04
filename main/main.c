@@ -71,6 +71,7 @@ static const char *TAG = "weather_station";
 static EventGroupHandle_t wifi_events;
 static weather_location_t location;
 static volatile bool zip_request_pending;
+static volatile bool refresh_request_pending;
 static char zip_request[WEATHER_ZIP_LEN];
 static volatile bool wifi_scan_pending;
 static volatile bool wifi_creds_pending;
@@ -524,6 +525,11 @@ static void init_touch(esp_lcd_panel_handle_t panel)
 
 /* All three run in the LVGL task and must not block it, so they only record
  * the request; the weather task does the network work. */
+static void on_refresh(void)
+{
+    refresh_request_pending = true;
+}
+
 static void on_zip_submit(const char *zip)
 {
     snprintf(zip_request, sizeof(zip_request), "%s", zip);
@@ -595,11 +601,18 @@ typedef struct {
     SemaphoreHandle_t done;
 } radar_job_t;
 
+/* Static so a task that outlives a timed-out wait never touches a dead stack
+ * frame; radar_busy stops a new one starting on top of it. */
+#define RADAR_JOIN_MS 90000
+static radar_job_t radar_job;
+static volatile bool radar_busy;
+
 static void radar_task(void *arg)
 {
-    radar_job_t *job = arg;
-    refresh_radar(&job->location);
-    xSemaphoreGive(job->done);
+    LV_UNUSED(arg);
+    refresh_radar(&radar_job.location);
+    radar_busy = false;
+    xSemaphoreGive(radar_job.done);
     vTaskDelete(NULL);
 }
 
@@ -611,9 +624,25 @@ static int refresh_now(weather_data_t *data)
     }
     ui_set_status("Updating...");
 
-    radar_job_t job = { .location = location, .done = xSemaphoreCreateBinary() };
-    bool radar_async = job.done != NULL &&
-        xTaskCreate(radar_task, "radar_task", 8192, &job, 5, NULL) == pdPASS;
+    bool radar_async = false;
+    bool radar_inline = false;
+    if (radar_busy) {
+        ESP_LOGW(TAG, "previous radar fetch still running; skipping radar this round");
+    } else {
+        if (radar_job.done == NULL) {
+            radar_job.done = xSemaphoreCreateBinary();
+        }
+        radar_job.location = location;
+        if (radar_job.done != NULL) {
+            xSemaphoreTake(radar_job.done, 0);   /* clear any stale completion */
+            radar_busy = true;
+            radar_async = xTaskCreate(radar_task, "radar_task", 8192, NULL, 5, NULL) == pdPASS;
+            if (!radar_async) {
+                radar_busy = false;
+            }
+        }
+        radar_inline = !radar_async;
+    }
 
     int64_t t_weather = esp_timer_get_time();
     if (weather_fetch(&location, data) == ESP_OK) {
@@ -629,12 +658,12 @@ static int refresh_now(weather_data_t *data)
     }
     ESP_LOGI(TAG, "weather fetch took %lld ms", (esp_timer_get_time() - t_weather) / 1000);
     if (radar_async) {
-        xSemaphoreTake(job.done, portMAX_DELAY);
-    } else {
-        refresh_radar(&job.location);   /* no task or semaphore: do it inline */
-    }
-    if (job.done != NULL) {
-        vSemaphoreDelete(job.done);
+        /* Bounded: a stalled radar request must not freeze weather refreshes. */
+        if (xSemaphoreTake(radar_job.done, pdMS_TO_TICKS(RADAR_JOIN_MS)) != pdTRUE) {
+            ESP_LOGW(TAG, "radar fetch still running after %d s; carrying on", RADAR_JOIN_MS / 1000);
+        }
+    } else if (radar_inline) {
+        refresh_radar(&radar_job.location);   /* no task or semaphore: do it inline */
     }
     int wait = seconds_until_next(data);
     ESP_LOGI(TAG, "Next refresh in %d s", wait);
@@ -728,6 +757,12 @@ static void weather_task(void *arg)
             }
         }
 
+        if (refresh_request_pending) {
+            refresh_request_pending = false;
+            ESP_LOGI(TAG, "manual refresh requested");
+            next_refresh = xTaskGetTickCount() + pdMS_TO_TICKS(refresh_now(data) * 1000);
+        }
+
         if (xTaskGetTickCount() >= next_refresh) {
             next_refresh = xTaskGetTickCount() + pdMS_TO_TICKS(refresh_now(data) * 1000);
         }
@@ -758,6 +793,7 @@ void app_main(void)
         .on_zip_submit = on_zip_submit,
         .on_wifi_scan = on_wifi_scan,
         .on_wifi_submit = on_wifi_submit,
+        .on_refresh = on_refresh,
     };
     if (lvgl_port_lock(1000)) {
         ui_create(&ui_cb);

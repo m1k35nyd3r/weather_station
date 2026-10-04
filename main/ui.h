@@ -9,12 +9,14 @@
 /* Called from the LVGL task when the user saves a 5-digit ZIP. */
 typedef void (*ui_zip_submit_cb_t)(const char *zip);
 typedef void (*ui_wifi_scan_cb_t)(void);
+typedef void (*ui_refresh_cb_t)(void);
 typedef void (*ui_wifi_submit_cb_t)(const char *ssid, const char *password);
 
 typedef struct {
     ui_zip_submit_cb_t on_zip_submit;
     ui_wifi_scan_cb_t on_wifi_scan;
     ui_wifi_submit_cb_t on_wifi_submit;
+    ui_refresh_cb_t on_refresh;
 } ui_callbacks_t;
 
 /* Build all three screens. Must be called with the LVGL lock held. */

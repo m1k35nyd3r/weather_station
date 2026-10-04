@@ -219,8 +219,18 @@ static void settings_event(lv_event_t *event)
 
 #define HOME_BTN_SIZE 56
 #define HEADER_TEXT_X (HOME_BTN_SIZE + 16)
-/* Right-hand readouts stop short of the gear. */
-#define HEADER_RIGHT_X (HOME_BTN_SIZE + 16)
+/* The refresh button sits just left of the gear. */
+#define REFRESH_BTN_X (HOME_BTN_SIZE + 12)
+/* Right-hand readouts stop short of both buttons. */
+#define HEADER_RIGHT_X (REFRESH_BTN_X + HOME_BTN_SIZE + 16)
+
+static void refresh_event(lv_event_t *event)
+{
+    LV_UNUSED(event);
+    if (callbacks.on_refresh != NULL) {
+        callbacks.on_refresh();
+    }
+}
 
 static void home_event(lv_event_t *event)
 {
@@ -266,6 +276,20 @@ static lv_obj_t *make_header(lv_obj_t *parent, lv_obj_t **title_out, lv_obj_t **
     lv_obj_t *gear_glyph = make_label(gear, LV_SYMBOL_SETTINGS, &lv_font_montserrat_24, COL_ACCENT);
     lv_obj_set_style_text_color(gear_glyph, COL_BG, LV_STATE_PRESSED);
     lv_obj_center(gear_glyph);
+
+    lv_obj_t *refresh = lv_button_create(header);
+    lv_obj_remove_style_all(refresh);
+    lv_obj_set_size(refresh, HOME_BTN_SIZE, HOME_BTN_SIZE);
+    lv_obj_align(refresh, LV_ALIGN_RIGHT_MID, -REFRESH_BTN_X, 0);
+    lv_obj_set_style_bg_color(refresh, COL_CARD, 0);
+    lv_obj_set_style_bg_opa(refresh, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(refresh, COL_ACCENT, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(refresh, 14, 0);
+    lv_obj_add_event_cb(refresh, refresh_event, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *refresh_glyph = make_label(refresh, LV_SYMBOL_REFRESH, &lv_font_montserrat_24, COL_ACCENT);
+    lv_obj_set_style_text_color(refresh_glyph, COL_BG, LV_STATE_PRESSED);
+    lv_obj_center(refresh_glyph);
 
     /* Title and subtitle live in a content-sized flex column so the pair is
      * centred against the home button as one block. Aligning each label
@@ -875,7 +899,7 @@ void ui_create(const ui_callbacks_t *cb)
     build_modal(screen);
 
     /* Bottom navigation */
-    static const char *nav_names[NAV_COUNT] = { "Today", "Hourly", "Radar" };
+    static const char *nav_names[NAV_COUNT] = { "Today", "Next 12 Hours", "Current Radar" };
     const int nav_w = (PAGE_W - (NAV_COUNT - 1) * GAP) / NAV_COUNT;
     for (int i = 0; i < NAV_COUNT; ++i) {
         nav_buttons[i] = lv_button_create(screen);
