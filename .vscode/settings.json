@@ -1,5 +1,5 @@
 {
-  "idf.currentSetup": "/home/mike.snyder/.espressif/v5.4.4/esp-idf",
+  "idf.currentSetup": "/home/mike.snyder/.espressif/v6.1/esp-idf",
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32p4"
   },
