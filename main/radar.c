@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 /* NOAA's GeoServer composites layers server-side, so one request returns the
  * radar mosaic already drawn over state boundaries -- no tile arithmetic and
@@ -43,6 +44,7 @@ void radar_free(radar_image_t *image)
 esp_err_t radar_fetch(const weather_location_t *location, radar_image_t *out)
 {
     radar_free(out);
+    int64_t t_start = esp_timer_get_time();
 
     /* EPSG:4326 is plate carree, so equal spans in degrees are not equal
      * distances on the ground. Widen the longitude span by 1/cos(lat) to keep
@@ -88,7 +90,9 @@ esp_err_t radar_fetch(const weather_location_t *location, radar_image_t *out)
         return err;
     }
 
+    int64_t t_open = esp_timer_get_time();
     int64_t content_length = esp_http_client_fetch_headers(client);
+    int64_t t_headers = esp_timer_get_time();
     int status = esp_http_client_get_status_code(client);
     if (content_length < 0 || status != 200) {
         ESP_LOGE(TAG, "radar request failed: status %d, length %lld", status, content_length);
@@ -134,6 +138,10 @@ esp_err_t radar_fetch(const weather_location_t *location, radar_image_t *out)
     buffer = NULL;   /* ownership handed over */
     ESP_LOGI(TAG, "radar %dx%d for %.3f,%.3f: %d bytes",
              RADAR_W, RADAR_H, location->latitude, location->longitude, total);
+    /* open = DNS + TCP + TLS; wait = server render; body = download. */
+    ESP_LOGI(TAG, "radar timing: open %lld ms, wait %lld ms, body %lld ms",
+             (t_open - t_start) / 1000, (t_headers - t_open) / 1000,
+             (esp_timer_get_time() - t_headers) / 1000);
 
 cleanup:
     if (buffer != NULL) {

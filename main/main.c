@@ -11,12 +11,14 @@
 #include "esp_lcd_touch_gt911.h"
 #include "esp_ldo_regulator.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "nvs_flash.h"
@@ -569,18 +571,36 @@ static int seconds_until_next(const weather_data_t *data)
  * refresh. Replaced wholesale on the next successful fetch. */
 static radar_image_t radar_image;
 
-static void refresh_radar(void)
+static void refresh_radar(const weather_location_t *loc)
 {
     radar_image_t fresh = { 0 };
-    if (radar_fetch(&location, &fresh) != ESP_OK) {
+    if (radar_fetch(loc, &fresh) != ESP_OK) {
         ESP_LOGW(TAG, "radar refresh failed; keeping previous image");
         return;
     }
     /* Point LVGL at the new bytes before releasing the old ones. */
     radar_image_t previous = radar_image;
     radar_image = fresh;
-    ui_set_radar(radar_image.png, radar_image.png_len, location.place);
+    ui_set_radar(radar_image.png, radar_image.png_len, loc->place);
     radar_free(&previous);
+}
+
+/* The radar and weather requests go to different hosts and do not depend on
+ * each other, so the radar runs on its own short-lived task while the weather
+ * fetch proceeds. refresh_now() waits for it, which keeps radar_image owned by
+ * one task at a time. The location is copied because a ZIP change can replace
+ * the global while the radar is still in flight. */
+typedef struct {
+    weather_location_t location;
+    SemaphoreHandle_t done;
+} radar_job_t;
+
+static void radar_task(void *arg)
+{
+    radar_job_t *job = arg;
+    refresh_radar(&job->location);
+    xSemaphoreGive(job->done);
+    vTaskDelete(NULL);
 }
 
 static int refresh_now(weather_data_t *data)
@@ -590,6 +610,12 @@ static int refresh_now(weather_data_t *data)
         return WEATHER_FALLBACK_S;
     }
     ui_set_status("Updating...");
+
+    radar_job_t job = { .location = location, .done = xSemaphoreCreateBinary() };
+    bool radar_async = job.done != NULL &&
+        xTaskCreate(radar_task, "radar_task", 8192, &job, 5, NULL) == pdPASS;
+
+    int64_t t_weather = esp_timer_get_time();
     if (weather_fetch(&location, data) == ESP_OK) {
         ui_set_weather(data);
         /* Feed the backlight so it can switch levels at dusk and dawn on its
@@ -600,7 +626,15 @@ static int refresh_now(weather_data_t *data)
         ui_set_status("Update failed");
         data->valid = false;
     }
-    refresh_radar();
+    ESP_LOGI(TAG, "weather fetch took %lld ms", (esp_timer_get_time() - t_weather) / 1000);
+    if (radar_async) {
+        xSemaphoreTake(job.done, portMAX_DELAY);
+    } else {
+        refresh_radar(&job.location);   /* no task or semaphore: do it inline */
+    }
+    if (job.done != NULL) {
+        vSemaphoreDelete(job.done);
+    }
     int wait = seconds_until_next(data);
     ESP_LOGI(TAG, "Next refresh in %d s", wait);
     return wait;
