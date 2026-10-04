@@ -78,7 +78,14 @@ Nothing needs configuring before the first flash. Credentials are deliberately
 the Wi-Fi settings screen opens by itself:
 
 1. Tap **Scan**, pick your network, type the password, tap **Connect**
-2. Tap the **Location** tab and enter your ZIP code
+2. Tap the **Location** tab and enter your ZIP code, or tap **Use my location**
+
+With no location saved, the device also estimates one from its public IP address
+as soon as Wi-Fi connects (ipwho.is, no key), then resolves the postal code it
+reports to a proper place name. This is city-level at best: it can be off by tens
+of miles, or wrong behind a VPN, so check the name shown and correct it with a ZIP
+if needed. A saved ZIP is never overridden automatically; **Use my location**
+re-detects on demand.
 
 Both are written to NVS on the device, so they survive reboots *and* reflashes,
 and neither ever touches the build. Until a location is set the Today screen

@@ -86,5 +86,12 @@ esp_err_t weather_location_save(const weather_location_t *location);
 /* Resolve a US ZIP to coordinates and a place name. Network required. */
 esp_err_t weather_lookup_zip(const char *zip, weather_location_t *out);
 
+/* Estimate the device's location from its public IP address (ipwho.is, no key).
+ * City-level at best: it can be off by tens of miles, or wrong behind a VPN. When
+ * the service returns a US postal code it is resolved through weather_lookup_zip()
+ * for a proper place name; otherwise the raw coordinates are used and `zip` is
+ * left empty. Network required. */
+esp_err_t weather_lookup_ip(weather_location_t *out);
+
 /* Fetch and parse the forecast for a location. Network required. */
 esp_err_t weather_fetch(const weather_location_t *location, weather_data_t *out);

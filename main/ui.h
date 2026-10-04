@@ -14,6 +14,7 @@ typedef void (*ui_zip_submit_cb_t)(const char *zip);
 typedef void (*ui_wifi_scan_cb_t)(void);
 typedef void (*ui_refresh_cb_t)(void);
 typedef void (*ui_theme_cb_t)(bool light);
+typedef void (*ui_locate_cb_t)(void);
 typedef void (*ui_wifi_submit_cb_t)(const char *ssid, const char *password);
 
 typedef struct {
@@ -22,6 +23,7 @@ typedef struct {
     ui_wifi_submit_cb_t on_wifi_submit;
     ui_refresh_cb_t on_refresh;
     ui_theme_cb_t on_theme;   /* called after the user flips dark/light */
+    ui_locate_cb_t on_locate; /* "Use my location" pressed on the Location screen */
 } ui_callbacks_t;
 
 /* Choose the starting theme. Call before ui_create(). */

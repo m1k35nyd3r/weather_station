@@ -867,7 +867,20 @@ static void save_event(lv_event_t *event)
     callbacks.on_zip_submit(zip_entry);
 }
 
-/* Location settings: ZIP display, Save button and a 3x4 numeric keypad. */
+/* "Use my location" pressed: ask the app to detect the location from the
+ * network. The result comes back through ui_set_zip_hint() and ui_set_location(). */
+static void locate_event(lv_event_t *event)
+{
+    LV_UNUSED(event);
+    lv_label_set_text(lbl_zip_hint, "Detecting location...");
+    lv_obj_set_style_text_color(lbl_zip_hint, COL_ACCENT, 0);
+    if (callbacks.on_locate != NULL) {
+        callbacks.on_locate();
+    }
+}
+
+/* Location settings: ZIP display, Save button, "Use my location" and a 3x4
+ * numeric keypad. */
 static void build_location(lv_obj_t *page)
 {
     make_settings_header(page, 0);
@@ -890,6 +903,18 @@ static void build_location(lv_obj_t *page)
 
     lbl_zip_hint = make_label(page, "5 more digits", &lv_font_montserrat_16, COL_MUTED);
     lv_obj_set_pos(lbl_zip_hint, 0, HEADER_H + GAP + 140);
+
+    /* Detect from the network, between the hint and the Save button. */
+    lv_obj_t *locate = lv_button_create(page);
+    lv_obj_remove_style_all(locate);
+    lv_obj_set_size(locate, 452, 56);
+    lv_obj_set_pos(locate, 0, HEADER_H + GAP + 190);
+    lv_obj_set_style_bg_color(locate, COL_CARD, 0);
+    lv_obj_set_style_bg_opa(locate, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(locate, COL_ACCENT, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(locate, 16, 0);
+    lv_obj_add_event_cb(locate, locate_event, LV_EVENT_CLICKED, NULL);
+    lv_obj_center(make_label(locate, LV_SYMBOL_GPS "  Use my location", &lv_font_montserrat_20, COL_ACCENT));
 
     /* Save button */
     btn_save = lv_button_create(page);

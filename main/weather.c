@@ -208,6 +208,62 @@ esp_err_t weather_lookup_zip(const char *zip, weather_location_t *out)
     return ESP_OK;
 }
 
+/* ipwho.is answers with the caller's own address when none is given. Asking
+ * only for the fields we use keeps the body to a few hundred bytes. */
+esp_err_t weather_lookup_ip(weather_location_t *out)
+{
+    char *response = heap_caps_malloc(2048, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    ESP_RETURN_ON_FALSE(response, ESP_ERR_NO_MEM, TAG, "IP lookup buffer allocation failed");
+
+    esp_err_t err = http_get("https://ipwho.is/?fields=success,city,region_code,latitude,longitude,postal",
+                             response, 2048);
+    if (err != ESP_OK) {
+        free(response);
+        return err;
+    }
+    cJSON *root = cJSON_Parse(response);
+    free(response);
+    ESP_RETURN_ON_FALSE(root, ESP_FAIL, TAG, "IP lookup returned invalid JSON");
+
+    cJSON *ok = cJSON_GetObjectItem(root, "success");
+    cJSON *lat = cJSON_GetObjectItem(root, "latitude");
+    cJSON *lon = cJSON_GetObjectItem(root, "longitude");
+    cJSON *city = cJSON_GetObjectItem(root, "city");
+    cJSON *region = cJSON_GetObjectItem(root, "region_code");
+    cJSON *postal = cJSON_GetObjectItem(root, "postal");
+    if (!cJSON_IsTrue(ok) || !cJSON_IsNumber(lat) || !cJSON_IsNumber(lon)) {
+        cJSON_Delete(root);
+        ESP_LOGE(TAG, "IP lookup did not return a location");
+        return ESP_FAIL;
+    }
+
+    /* The service's own town names can be odd ("Township 5-Faucette"), so
+     * prefer the ZIP route, which gives the name people recognise. */
+    if (cJSON_IsString(postal) && strlen(postal->valuestring) == WEATHER_ZIP_LEN - 1) {
+        char zip[WEATHER_ZIP_LEN];
+        snprintf(zip, sizeof(zip), "%s", postal->valuestring);
+        if (weather_lookup_zip(zip, out) == ESP_OK) {
+            cJSON_Delete(root);
+            ESP_LOGI(TAG, "IP location resolved via ZIP %s", zip);
+            return ESP_OK;
+        }
+    }
+
+    memset(out, 0, sizeof(*out));
+    if (cJSON_IsString(city) && cJSON_IsString(region)) {
+        snprintf(out->place, sizeof(out->place), "%s, %s", city->valuestring, region->valuestring);
+    } else if (cJSON_IsString(city)) {
+        snprintf(out->place, sizeof(out->place), "%s", city->valuestring);
+    } else {
+        snprintf(out->place, sizeof(out->place), "%s", "Detected location");
+    }
+    out->latitude = (float)lat->valuedouble;
+    out->longitude = (float)lon->valuedouble;
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "IP location %s (%.4f, %.4f)", out->place, out->latitude, out->longitude);
+    return ESP_OK;
+}
+
 /* ------------------------------------------------------------- forecast --- */
 
 /* "YYYY-MM-DD" -> "MON". Uses mktime only to find the weekday. */

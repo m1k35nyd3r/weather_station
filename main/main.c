@@ -95,6 +95,7 @@ static weather_location_t location;
  * (and fill the matching request struct); the weather task acts on them. */
 static volatile bool zip_request_pending;
 static volatile bool refresh_request_pending;
+static volatile bool locate_request_pending;
 static char zip_request[WEATHER_ZIP_LEN];
 static volatile bool wifi_scan_pending;
 static volatile bool wifi_creds_pending;
@@ -600,6 +601,12 @@ static void on_refresh(void)
 }
 
 /* UI callback: a five-digit ZIP was submitted from the Location screen. */
+/* UI callback: "Use my location" was pressed. */
+static void on_locate(void)
+{
+    locate_request_pending = true;
+}
+
 static void on_zip_submit(const char *zip)
 {
     snprintf(zip_request, sizeof(zip_request), "%s", zip);
@@ -691,6 +698,28 @@ static void radar_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* Estimate the location from the network, save it and show it. Used on first
+ * boot when nothing is set and by the "Use my location" button. Returns true on
+ * success; on failure the current location is left as it was. */
+static bool detect_location(void)
+{
+    ui_set_status("Detecting location...");
+    weather_location_t found;
+    if (weather_lookup_ip(&found) != ESP_OK) {
+        ui_set_zip_hint("Could not detect location", true);
+        ui_set_status(weather_location_is_set(&location) ? "Location unchanged"
+                                                         : "Tap the gear to set your location");
+        return false;
+    }
+    location = found;
+    weather_location_save(&location);
+    ui_set_location(location.place, location.zip);
+    char hint[WEATHER_PLACE_LEN + 16];
+    snprintf(hint, sizeof(hint), "Detected %s", location.place);
+    ui_set_zip_hint(hint, false);
+    return true;
+}
+
 /* Refresh everything now and return the seconds until the next scheduled
  * refresh. The radar is fetched on its own task while the forecast loads, then
  * joined (with a time limit) before returning. Safe to call for any trigger:
@@ -770,9 +799,12 @@ static void weather_task(void *arg)
 
     /* Without a location there is nothing sensible to fetch -- blank Kconfig
      * coordinates would otherwise request weather for 0N 0E. Wait for a ZIP. */
+    if (!weather_location_is_set(&location)) {
+        detect_location();   /* a saved ZIP always wins, so this is first boot only */
+    }
     while (!weather_location_is_set(&location)) {
         ui_set_status("Tap the gear to set your location");
-        if (zip_request_pending) {
+        if (zip_request_pending || locate_request_pending) {
             break;
         }
         vTaskDelay(pdMS_TO_TICKS(250));
@@ -846,6 +878,13 @@ static void weather_task(void *arg)
             next_refresh = xTaskGetTickCount() + pdMS_TO_TICKS(refresh_now(data) * 1000);
         }
 
+        if (locate_request_pending) {
+            locate_request_pending = false;
+            if (detect_location()) {
+                next_refresh = xTaskGetTickCount() + pdMS_TO_TICKS(refresh_now(data) * 1000);
+            }
+        }
+
         if (xTaskGetTickCount() >= next_refresh) {
             next_refresh = xTaskGetTickCount() + pdMS_TO_TICKS(refresh_now(data) * 1000);
         }
@@ -881,6 +920,7 @@ void app_main(void)
         .on_wifi_submit = on_wifi_submit,
         .on_refresh = on_refresh,
         .on_theme = on_theme,
+        .on_locate = on_locate,
     };
     ui_set_light_mode(theme_load());
     if (lvgl_port_lock(1000)) {

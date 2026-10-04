@@ -52,6 +52,9 @@ either have no console or drop off the bus on reset.
 - Colours are runtime palette fields (`COL_*` in `ui.c`), switched in place by
   `apply_theme()`. Never hard-code `lv_color_hex()` for a themed colour; add a
   `palette_t` field and set it in both palettes.
+- Location can come from a ZIP (`weather_lookup_zip`) or the public IP
+  (`weather_lookup_ip`, city-level, resolved through its postal code). Auto-detect
+  runs only when no location is saved; never let it overwrite a saved ZIP.
 - The device clock is UTC. Local time comes from the forecast's
   `utc_offset_seconds` (`weather_data_t`), never from `TZ`.
 - Weather and radar are fetched in parallel in `refresh_now()`; the radar wait
