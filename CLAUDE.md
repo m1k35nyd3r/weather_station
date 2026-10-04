@@ -49,6 +49,9 @@ either have no console or drop off the bus on reset.
 - Labels can only render ASCII, `°` and `LV_SYMBOL_*`. Anything else is a box.
 - Generated files (`main/icons/weather_font_*.c`, `wi_glyphs.h`) carry a
   "do not edit" banner; change `tools/weather_icons.txt` and regenerate.
+- Colours are runtime palette fields (`COL_*` in `ui.c`), switched in place by
+  `apply_theme()`. Never hard-code `lv_color_hex()` for a themed colour; add a
+  `palette_t` field and set it in both palettes.
 - The device clock is UTC. Local time comes from the forecast's
   `utc_offset_seconds` (`weather_data_t`), never from `TZ`.
 - Weather and radar are fetched in parallel in `refresh_now()`; the radar wait

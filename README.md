@@ -11,7 +11,7 @@ Five screens, driven by touch. The bottom bar has three tabs:
 | **Next 12 Hours** | 12-hour temperature chart plus per-hour cards with rain probability |
 | **Current Radar** | Full-bleed live precipitation radar centred on your location, with state outlines |
 | **Day** | Opened from a Today day card: all 24 hours of that day as a temperature line over two rows of hour cards (temperature and rain chance). The home button returns to Today |
-| **Settings** | Two tabs behind the gear icon: **Location** (ZIP keypad) and **Wi-Fi** (network scan and password entry) |
+| **Settings** | Two tabs behind the gear icon: **Location** (ZIP keypad) and **Wi-Fi** (network scan and password entry). A **Theme** button at the right of its header switches between dark and light mode; the choice is saved on the device |
 
 The header on Today, Next 12 Hours and Day has a **home** button on the left and,
 on the right, a **refresh** button next to the **gear**. Refresh asks for an
@@ -147,6 +147,18 @@ explicitly as well races it and logs an RPC "precondition not met" error.
 The same applies to `esp_wifi_disconnect()` and `esp_wifi_sta_get_ap_info()`
 when unassociated — both go over the hosted RPC and log on failure, which is
 why `wifi_cfg_apply()` takes an explicit `disconnect_first`.
+
+---
+
+## Dark and light themes
+
+Every colour is read from a runtime palette in `ui.c` (`COL_*`). The Theme button
+in the settings header calls `apply_theme()`, which remaps each styled colour in
+the live widget tree from the old palette to the new one, so nothing is rebuilt
+and no state (Wi-Fi list, selected day, status text) is lost. The choice is saved
+in NVS (`ui_prefs`/`light`) and applied at boot. To add a colour, add a field to
+`palette_t` and set it in both branches of `load_palette()`. The Wi-Fi password
+keyboard uses LVGL's own (light) theme in both modes.
 
 ---
 
