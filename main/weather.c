@@ -308,6 +308,7 @@ esp_err_t weather_fetch(const weather_location_t *location, weather_data_t *out)
 
     cJSON *offset = cJSON_GetObjectItem(root, "utc_offset_seconds");
     int utc_offset = cJSON_IsNumber(offset) ? offset->valueint : 0;
+    out->utc_offset_seconds = utc_offset;
 
     cJSON *current = cJSON_GetObjectItem(root, "current");
     cJSON *daily = cJSON_GetObjectItem(root, "daily");

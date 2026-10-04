@@ -24,6 +24,9 @@ static bool fade_ready;
 static time_t sunrise_utc;
 static time_t sunset_utc;
 static bool was_night;
+static int utc_offset_s;
+static bool utc_offset_known;
+static bool was_quiet;
 
 esp_err_t backlight_init(int gpio)
 {
@@ -93,6 +96,26 @@ void backlight_set_sun_times(time_t sunrise, time_t sunset)
     sunset_utc = sunset;
 }
 
+void backlight_set_utc_offset(int seconds)
+{
+    utc_offset_s = seconds;
+    utc_offset_known = true;
+}
+
+bool backlight_is_quiet_hours(void)
+{
+    time_t now = time(NULL);
+    /* Same trust rule as the night test, plus we need the offset: without it
+     * we cannot tell local 3am from local 3pm, and guessing wrong would
+     * blank the screen in the middle of the day. */
+    if (now < 1700000000 || !utc_offset_known) {
+        return false;
+    }
+    time_t local = now + utc_offset_s;
+    int hour = (int)((local % 86400) / 3600);
+    return hour >= BACKLIGHT_QUIET_START_HOUR && hour < BACKLIGHT_QUIET_END_HOUR;
+}
+
 bool backlight_is_night(void)
 {
     time_t now = time(NULL);
@@ -114,8 +137,18 @@ static void idle_timer_cb(lv_timer_t *timer)
     bool night = backlight_is_night();
     bool idle = idle_ms >= BACKLIGHT_IDLE_AFTER_S * 1000U;
 
+    bool quiet = backlight_is_quiet_hours();
+    if (quiet != was_quiet) {
+        was_quiet = quiet;
+        ESP_LOGI(TAG, "%s", quiet ? "quiet hours: screen off unless touched"
+                                  : "quiet hours over");
+    }
+
     int wanted;
-    if (night) {
+    if (quiet) {
+        /* Touched recently: show it at the dim night level, then go dark. */
+        wanted = (idle_ms >= BACKLIGHT_QUIET_WAKE_S * 1000U) ? 0 : BACKLIGHT_NIGHT_ACTIVE;
+    } else if (night) {
         wanted = idle ? BACKLIGHT_NIGHT_IDLE : BACKLIGHT_NIGHT_ACTIVE;
     } else {
         wanted = idle ? BACKLIGHT_DAY_IDLE : BACKLIGHT_DAY_ACTIVE;
@@ -126,7 +159,7 @@ static void idle_timer_cb(lv_timer_t *timer)
         ESP_LOGI(TAG, "%s", night ? "sunset: night levels" : "sunrise: day levels");
     }
     if (wanted != current_percent) {
-        ESP_LOGI(TAG, "%s, idle %us -> %d%%", night ? "night" : "day",
+        ESP_LOGI(TAG, "%s, idle %us -> %d%%", quiet ? "quiet" : night ? "night" : "day",
                  (unsigned)(idle_ms / 1000), wanted);
         backlight_set(wanted);
     }

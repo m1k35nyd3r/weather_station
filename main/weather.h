@@ -44,6 +44,9 @@ typedef struct {
     /* Today's sun times as UTC epochs; 0 when the response omitted them. */
     time_t sunrise_utc;
     time_t sunset_utc;
+    /* Local offset from UTC at the location, in seconds; the device clock
+     * itself is kept in UTC. Used to find local hours for the quiet window. */
+    int utc_offset_seconds;
     weather_day_t days[WEATHER_DAILY_MAX];
     int day_count;
     weather_hour_t hours[WEATHER_HOURLY_MAX];

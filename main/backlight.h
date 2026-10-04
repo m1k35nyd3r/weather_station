@@ -13,6 +13,13 @@
 #define BACKLIGHT_NIGHT_ACTIVE    25
 #define BACKLIGHT_NIGHT_IDLE       4
 
+/* Quiet hours, local time: the screen is fully off from QUIET_START_HOUR up to
+ * QUIET_END_HOUR unless touched. A touch lights it at the night-active level
+ * and it blanks again after QUIET_WAKE_S without another. */
+#define BACKLIGHT_QUIET_START_HOUR  1
+#define BACKLIGHT_QUIET_END_HOUR    7
+#define BACKLIGHT_QUIET_WAKE_S     60
+
 /* How long after the last touch before settling to the idle level. */
 #define BACKLIGHT_IDLE_AFTER_S   600
 
@@ -28,6 +35,13 @@ int backlight_get(void);
  * -- or if either value is 0 -- the backlight stays on the day levels, so a
  * failed fetch never leaves the screen unexpectedly dark. */
 void backlight_set_sun_times(time_t sunrise_utc, time_t sunset_utc);
+
+/* Local offset from UTC in seconds, from the forecast. Until this is called
+ * the offset is 0 and quiet hours are not applied. */
+void backlight_set_utc_offset(int seconds);
+
+/* True when the clock is trustworthy and local time is inside quiet hours. */
+bool backlight_is_quiet_hours(void);
 
 /* True when the clock is trustworthy and we are outside daylight. */
 bool backlight_is_night(void);

@@ -621,6 +621,7 @@ static int refresh_now(weather_data_t *data)
         /* Feed the backlight so it can switch levels at dusk and dawn on its
          * own, rather than only when a fetch happens to land. */
         backlight_set_sun_times(data->sunrise_utc, data->sunset_utc);
+        backlight_set_utc_offset(data->utc_offset_seconds);
         ui_set_status("Updated just now");
     } else {
         ui_set_status("Update failed");
