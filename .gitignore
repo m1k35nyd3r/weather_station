@@ -25,3 +25,6 @@ tools/.cache/
 # identifies the C6's factory firmware version.
 docs/JC1060P470C_I_W/8-Burn operation/
 docs/JC1060P470C_I_W/1-Demo/Demo_Arduino/
+
+#VS Code
+.vscode/
