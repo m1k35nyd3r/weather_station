@@ -52,6 +52,7 @@ typedef enum {
     PAGE_RADAR,
     PAGE_LOCATION,
     PAGE_WIFI,
+    PAGE_DAY,       // one forecast day, hour by hour; opened from the Today strip
     PAGE_COUNT,
 } ui_page_t;
 
@@ -86,6 +87,19 @@ static lv_chart_series_t *chart_series;
 static lv_obj_t *hour_labels[8];
 static lv_obj_t *hour_temps[8];
 static lv_obj_t *hour_rain[8];
+
+/* Day detail */
+#define DAY_COLS 12
+static lv_obj_t *lbl_day_title;
+static lv_obj_t *lbl_day_sub;
+static lv_obj_t *day_chart;
+static lv_chart_series_t *day_series;
+static lv_obj_t *day_hour_labels[WEATHER_DAY_HOURS];
+static lv_obj_t *day_hour_temps[WEATHER_DAY_HOURS];
+static lv_obj_t *day_hour_rain[WEATHER_DAY_HOURS];
+/* Copied from each forecast so the page can be filled when a day is tapped. */
+static weather_data_t day_cache;
+static int selected_day;
 
 /* Radar */
 static lv_obj_t *img_radar;
@@ -166,6 +180,9 @@ static void set_glyph(lv_obj_t *label, int code)
     lv_obj_set_style_text_color(label, condition_color(code), 0);
 }
 
+static void show_page(ui_page_t page);
+static void fill_day_page(void);
+
 static void show_page(ui_page_t page)
 {
     active_page = page;
@@ -180,7 +197,7 @@ static void show_page(ui_page_t page)
 
     /* Settings has no tab, so every button goes inactive while it is open. */
     for (int i = 0; i < NAV_COUNT; ++i) {
-        bool selected = (nav_pages[i] == page);
+        bool selected = (nav_pages[i] == page) || (page == PAGE_DAY && nav_pages[i] == PAGE_TODAY);
         lv_obj_set_style_bg_color(nav_buttons[i], selected ? COL_ACCENT : COL_CARD, 0);
         lv_obj_set_style_text_color(lv_obj_get_child(nav_buttons[i], 0),
                                     selected ? COL_BG : COL_TEXT, 0);
@@ -270,6 +287,17 @@ static lv_obj_t *make_header(lv_obj_t *parent, lv_obj_t **title_out, lv_obj_t **
 
 /* ------------------------------------------------------------ today page --- */
 
+static void day_card_event(lv_event_t *event)
+{
+    int day = (int)(intptr_t)lv_event_get_user_data(event);
+    if (day >= day_cache.day_count) {
+        return;   // no forecast yet for this slot
+    }
+    selected_day = day;
+    fill_day_page();
+    show_page(PAGE_DAY);
+}
+
 static void build_today(lv_obj_t *page)
 {
     lv_obj_t *header = make_header(page, &lbl_place, &lbl_subtitle);
@@ -313,6 +341,9 @@ static void build_today(lv_obj_t *page)
         lv_obj_t *card = make_card(page, COL_CARD);
         lv_obj_set_size(card, 182, 132);
         lv_obj_set_pos(card, i * 198, HEADER_H + GAP + 240 + GAP);
+        lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_style_bg_color(card, COL_DISABLED, LV_STATE_PRESSED);
+        lv_obj_add_event_cb(card, day_card_event, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
         day_labels[i] = make_label(card, "---", &lv_font_montserrat_16, COL_MUTED);
         lv_obj_align(day_labels[i], LV_ALIGN_TOP_MID, 0, 14);
@@ -363,6 +394,97 @@ static void build_hourly(lv_obj_t *page)
 
         hour_rain[i] = make_label(hour_card, "", &lv_font_montserrat_14, COL_RAIN);
         lv_obj_align(hour_rain[i], LV_ALIGN_BOTTOM_MID, 0, -14);
+    }
+}
+
+/* ------------------------------------------------------------- day page --- */
+
+/* 24 hours in two rows of 12 under a temperature line, so a whole day fits
+ * without scrolling. */
+static void build_day(lv_obj_t *page)
+{
+    make_header(page, &lbl_day_title, &lbl_day_sub);
+
+    lv_obj_t *card = make_card(page, COL_CARD);
+    lv_obj_set_size(card, PAGE_W, 150);
+    lv_obj_set_pos(card, 0, HEADER_H + GAP);
+
+    day_chart = lv_chart_create(card);
+    lv_obj_set_size(day_chart, PAGE_W - 48, 100);
+    lv_obj_align(day_chart, LV_ALIGN_TOP_MID, 0, 20);
+    lv_chart_set_type(day_chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(day_chart, WEATHER_DAY_HOURS);
+    lv_chart_set_div_line_count(day_chart, 3, 0);
+    lv_obj_set_style_bg_opa(day_chart, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(day_chart, 0, 0);
+    lv_obj_set_style_line_color(day_chart, lv_color_hex(0x24405C), LV_PART_MAIN);
+    lv_obj_set_style_size(day_chart, 6, 6, LV_PART_INDICATOR);
+    day_series = lv_chart_add_series(day_chart, COL_WARM, LV_CHART_AXIS_PRIMARY_Y);
+
+    const int cell_gap = 8;
+    const int cell_w = (PAGE_W - (DAY_COLS - 1) * cell_gap) / DAY_COLS;
+    const int cell_h = 100;
+    const int top = HEADER_H + GAP + 150 + GAP;
+    for (int i = 0; i < WEATHER_DAY_HOURS; ++i) {
+        lv_obj_t *cell = make_card(page, COL_CARD);
+        lv_obj_set_size(cell, cell_w, cell_h);
+        lv_obj_set_pos(cell, (i % DAY_COLS) * (cell_w + cell_gap),
+                       top + (i / DAY_COLS) * (cell_h + 12));
+
+        day_hour_labels[i] = make_label(cell, "--", &lv_font_montserrat_14, COL_MUTED);
+        lv_obj_align(day_hour_labels[i], LV_ALIGN_TOP_MID, 0, 10);
+
+        day_hour_temps[i] = make_label(cell, "", &lv_font_montserrat_18, COL_TEXT);
+        lv_obj_align(day_hour_temps[i], LV_ALIGN_CENTER, 0, 2);
+
+        day_hour_rain[i] = make_label(cell, "", &lv_font_montserrat_14, COL_RAIN);
+        lv_obj_align(day_hour_rain[i], LV_ALIGN_BOTTOM_MID, 0, -10);
+    }
+}
+
+/* Fill the day page from day_cache; the caller holds the LVGL lock. */
+static void fill_day_page(void)
+{
+    int d = selected_day;
+    if (d < 0 || d >= day_cache.day_count) {
+        return;
+    }
+    const weather_day_t *day = &day_cache.days[d];
+    lv_label_set_text_fmt(lbl_day_title, "%s - hour by hour", day->label);
+    lv_label_set_text_fmt(lbl_day_sub, "%d° high   %d° low", whole(day->high), whole(day->low));
+
+    int count = day_cache.day_hour_count[d];
+    if (count > 0) {
+        float low = day_cache.day_hours[d][0].temperature;
+        float high = low;
+        for (int i = 1; i < count; ++i) {
+            float t = day_cache.day_hours[d][i].temperature;
+            if (t < low) low = t;
+            if (t > high) high = t;
+        }
+        if (high - low < 4.0f) {
+            high = low + 4.0f;
+        }
+        lv_chart_set_range(day_chart, LV_CHART_AXIS_PRIMARY_Y, (int32_t)low - 2, (int32_t)high + 2);
+        for (int i = 0; i < WEATHER_DAY_HOURS; ++i) {
+            lv_chart_set_value_by_id(day_chart, day_series, i,
+                                     i < count ? (int32_t)day_cache.day_hours[d][i].temperature
+                                               : LV_CHART_POINT_NONE);
+        }
+        lv_chart_refresh(day_chart);
+    }
+
+    for (int i = 0; i < WEATHER_DAY_HOURS; ++i) {
+        if (i < count) {
+            const weather_hour_t *hour = &day_cache.day_hours[d][i];
+            lv_label_set_text(day_hour_labels[i], hour->label);
+            lv_label_set_text_fmt(day_hour_temps[i], "%d°", whole(hour->temperature));
+            lv_label_set_text_fmt(day_hour_rain[i], "%d%%", hour->rain_chance);
+        } else {
+            lv_label_set_text(day_hour_labels[i], "--");
+            lv_label_set_text(day_hour_temps[i], "");
+            lv_label_set_text(day_hour_rain[i], "");
+        }
     }
 }
 
@@ -746,6 +868,7 @@ void ui_create(const ui_callbacks_t *cb)
 
     build_today(pages[PAGE_TODAY]);
     build_hourly(pages[PAGE_HOURLY]);
+    build_day(pages[PAGE_DAY]);
     build_radar(pages[PAGE_RADAR]);
     build_location(pages[PAGE_LOCATION]);
     build_wifi(pages[PAGE_WIFI]);
@@ -958,6 +1081,11 @@ void ui_set_weather(const weather_data_t *data)
 {
     if (!data->valid || !lvgl_port_lock(1000)) {
         return;
+    }
+
+    day_cache = *data;
+    if (active_page == PAGE_DAY) {
+        fill_day_page();   // keep an open day page current across refreshes
     }
 
     const weather_current_t *now = &data->current;

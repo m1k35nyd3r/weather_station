@@ -406,6 +406,36 @@ esp_err_t weather_fetch(const weather_location_t *location, weather_data_t *out)
         }
     }
 
+    /* The same response carries every hour of every forecast day. File each
+     * under the day whose date it starts with. */
+    if (hourly) {
+        cJSON *times = cJSON_GetObjectItem(hourly, "time");
+        cJSON *temps = cJSON_GetObjectItem(hourly, "temperature_2m");
+        cJSON *chances = cJSON_GetObjectItem(hourly, "precipitation_probability");
+        int hour_total = cJSON_IsArray(times) ? cJSON_GetArraySize(times) : 0;
+        for (int i = 0; i < hour_total; ++i) {
+            cJSON *entry = cJSON_GetArrayItem(times, i);
+            cJSON *temp = cJSON_GetArrayItem(temps, i);
+            if (!cJSON_IsString(entry) || !cJSON_IsNumber(temp)) {
+                continue;
+            }
+            for (int d = 0; d < out->day_count; ++d) {
+                cJSON *date = cJSON_GetArrayItem(dates, d);
+                if (!cJSON_IsString(date) || strncmp(entry->valuestring, date->valuestring, 10) != 0) {
+                    continue;
+                }
+                if (out->day_hour_count[d] < WEATHER_DAY_HOURS) {
+                    weather_hour_t *hour = &out->day_hours[d][out->day_hour_count[d]++];
+                    format_hour_label(entry->valuestring, hour->label, sizeof(hour->label));
+                    hour->temperature = (float)temp->valuedouble;
+                    cJSON *chance = cJSON_GetArrayItem(chances, i);
+                    hour->rain_chance = cJSON_IsNumber(chance) ? chance->valueint : 0;
+                }
+                break;
+            }
+        }
+    }
+
     cJSON_Delete(root);
     out->valid = true;
     ESP_LOGI(TAG, "Forecast: %.0fF, %d days, %d hours; source interval %ds",
