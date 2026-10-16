@@ -41,7 +41,11 @@ CONFIG_ESP_SDIO_GPIO_RESET_SLAVE=54
 CONFIG_ESP_SDIO_4_BIT_BUS=y
 CONFIG_ESP_SDIO_BUS_WIDTH=4
 # 0.0.6 spells this ESP_SDIO_FREQ_<target>; ESP_SDIO_CLOCK_FREQ is derived.
-CONFIG_ESP_SDIO_FREQ_ESP32P4=40000
+# 20 MHz, not the 40 MHz default: at 40 the bus took CRC errors
+# (sdmmc_send_cmd 0x109) after a few refreshes, after which the host read task
+# stops and every request fails until reboot. 20 MHz is still far more than a
+# weather fetch needs.
+CONFIG_ESP_SDIO_FREQ_ESP32P4=20000
 CONFIG_ESP_SDIO_PIN_CMD=19
 CONFIG_ESP_SDIO_PIN_CLK=18
 CONFIG_ESP_SDIO_PIN_D0=14

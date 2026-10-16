@@ -148,6 +148,12 @@ mode. A 3.3V USB-UART adapter wired to CN5 is the only route.
 SDIO pins (set in `sdkconfig.defaults`): CMD 19, CLK 18, D0–D3 14–17,
 co-processor reset GPIO 54.
 
+The SDIO clock is **20 MHz**, not ESP-Hosted's 40 MHz default. At 40 MHz the
+bus takes a CRC error after a few refreshes (`sdmmc_send_cmd returned 0x109`,
+then `H_SDIO_DRV: sdio_read_task: Failed to read data`), after which no packet
+gets through — connects time out, then DNS fails — while Wi-Fi still reports
+connected. Only a reboot recovers it. If it ever recurs, try 10 MHz.
+
 Credentials are staged with `wifi_cfg_set_config()` *before* `esp_wifi_start()`,
 so the `STA_START` event handler performs the single connect. Connecting
 explicitly as well races it and logs an RPC "precondition not met" error.
