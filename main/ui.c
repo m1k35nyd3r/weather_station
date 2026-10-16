@@ -126,7 +126,6 @@ static int whole(float value)
 
 typedef enum {
     PAGE_TODAY = 0,
-    PAGE_HOURLY,
     PAGE_RADAR,
     PAGE_LOCATION,
     PAGE_WIFI,
@@ -137,9 +136,13 @@ typedef enum {
 static void style_settings_tabs(ui_page_t page);
 
 /* Location is not a tab any more -- the gear in each header opens it -- so
- * the nav bar maps its buttons onto a subset of the pages. */
-#define NAV_COUNT 3
-static const ui_page_t nav_pages[NAV_COUNT] = { PAGE_TODAY, PAGE_HOURLY, PAGE_RADAR };
+ * the nav bar maps its buttons onto a subset of the pages. The bar keeps three
+ * equal slots: the buttons take the outer two and the clock the middle. */
+#define NAV_COUNT 2
+#define NAV_SLOTS 3
+static const ui_page_t nav_pages[NAV_COUNT] = { PAGE_TODAY, PAGE_RADAR };
+static const int nav_slots[NAV_COUNT] = { 0, 2 };
+#define CLOCK_SLOT 1
 
 static lv_obj_t *pages[PAGE_COUNT];
 static lv_obj_t *nav_buttons[NAV_COUNT];
@@ -158,13 +161,11 @@ static lv_obj_t *day_labels[WEATHER_DAILY_MAX];
 static lv_obj_t *day_glyphs[WEATHER_DAILY_MAX];
 static lv_obj_t *day_temps[WEATHER_DAILY_MAX];
 
-/* Hourly */
-static lv_obj_t *lbl_hourly_sub;
-static lv_obj_t *chart;
-static lv_chart_series_t *chart_series;
-static lv_obj_t *hour_labels[8];
-static lv_obj_t *hour_temps[8];
-static lv_obj_t *hour_rain[8];
+/* Date and time in the middle of the nav bar. Blank until a forecast has
+ * supplied the location's UTC offset, since the device clock is UTC. */
+static lv_obj_t *lbl_clock;
+static int clock_offset_s;
+static bool clock_offset_known;
 
 /* Day detail */
 #define DAY_COLS 12
@@ -536,48 +537,6 @@ static void build_today(lv_obj_t *page)
     }
 }
 
-/* ----------------------------------------------------------- hourly page --- */
-
-/* Next 12 Hours: a temperature line chart over a row of hour cards. */
-static void build_hourly(lv_obj_t *page)
-{
-    lv_obj_t *title = NULL;
-    make_header(page, &title, &lbl_hourly_sub);
-    lv_label_set_text(title, "Next 12 hours");
-
-    lv_obj_t *card = make_card(page, COL_CARD);
-    lv_obj_set_size(card, PAGE_W, 224);
-    lv_obj_set_pos(card, 0, HEADER_H + GAP);
-
-    chart = lv_chart_create(card);
-    lv_obj_set_size(chart, PAGE_W - 48, 170);
-    lv_obj_align(chart, LV_ALIGN_TOP_MID, 0, 20);
-    lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
-    lv_chart_set_point_count(chart, WEATHER_HOURLY_MAX);
-    lv_chart_set_div_line_count(chart, 4, 0);
-    lv_obj_set_style_bg_opa(chart, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(chart, 0, 0);
-    lv_obj_set_style_line_color(chart, COL_GRID, LV_PART_MAIN);
-    lv_obj_set_style_size(chart, 8, 8, LV_PART_INDICATOR);
-    chart_series = lv_chart_add_series(chart, COL_WARM, LV_CHART_AXIS_PRIMARY_Y);
-
-    /* Hour cards */
-    for (int i = 0; i < 8; ++i) {
-        lv_obj_t *hour_card = make_card(page, COL_CARD);
-        lv_obj_set_size(hour_card, 118, 148);
-        lv_obj_set_pos(hour_card, i * 124, HEADER_H + GAP + 224 + GAP);
-
-        hour_labels[i] = make_label(hour_card, "--", &lv_font_montserrat_16, COL_MUTED);
-        lv_obj_align(hour_labels[i], LV_ALIGN_TOP_MID, 0, 14);
-
-        hour_temps[i] = make_label(hour_card, "--", &lv_font_montserrat_22, COL_TEXT);
-        lv_obj_align(hour_temps[i], LV_ALIGN_CENTER, 0, 0);
-
-        hour_rain[i] = make_label(hour_card, "", &lv_font_montserrat_14, COL_RAIN);
-        lv_obj_align(hour_rain[i], LV_ALIGN_BOTTOM_MID, 0, -14);
-    }
-}
-
 /* ------------------------------------------------------------- day page --- */
 
 /* 24 hours in two rows of 12 under a temperature line, so a whole day fits
@@ -785,7 +744,6 @@ static void apply_theme(bool light)
 
     lv_obj_t *screen = lv_screen_active();
     recolor_tree(screen, &old, &pal);
-    lv_chart_set_series_color(chart, chart_series, COL_WARM);
     lv_chart_set_series_color(day_chart, day_series, COL_WARM);
     if (wall_ready) {
         update_wallpaper(wall_sky, wall_night);   /* same scene, new tint */
@@ -1154,6 +1112,30 @@ static void build_wifi(lv_obj_t *page)
 
 /* ------------------------------------------------------------------ api --- */
 
+/* Once a second, from the LVGL timer (so the lock is already held): show the
+ * local date and time, touching the label only when the minute changes. */
+static void clock_tick(lv_timer_t *timer)
+{
+    LV_UNUSED(timer);
+    time_t utc = time(NULL);
+    if (!clock_offset_known || utc < 1700000000) {
+        return;
+    }
+    time_t local = utc + clock_offset_s;
+    struct tm tm_local;
+    gmtime_r(&local, &tm_local);
+
+    char date[16];
+    strftime(date, sizeof(date), "%a, %b", &tm_local);
+    int hour12 = tm_local.tm_hour % 12 == 0 ? 12 : tm_local.tm_hour % 12;
+    char text[40];
+    snprintf(text, sizeof(text), "%s %d   %d:%02d %s", date, tm_local.tm_mday, hour12,
+             tm_local.tm_min, tm_local.tm_hour < 12 ? "AM" : "PM");
+    if (strcmp(text, lv_label_get_text(lbl_clock)) != 0) {
+        lv_label_set_text(lbl_clock, text);
+    }
+}
+
 /* Build every page, the password dialog and the bottom nav bar, then show
  * Today. Call once, with the LVGL lock held, after ui_set_light_mode(). */
 void ui_create(const ui_callbacks_t *cb)
@@ -1188,7 +1170,6 @@ void ui_create(const ui_callbacks_t *cb)
     }
 
     build_today(pages[PAGE_TODAY]);
-    build_hourly(pages[PAGE_HOURLY]);
     build_day(pages[PAGE_DAY]);
     build_radar(pages[PAGE_RADAR]);
     build_location(pages[PAGE_LOCATION]);
@@ -1196,13 +1177,13 @@ void ui_create(const ui_callbacks_t *cb)
     build_modal(screen);
 
     /* Bottom navigation */
-    static const char *nav_names[NAV_COUNT] = { "Today", "Next 12 Hours", "Current Radar" };
-    const int nav_w = (PAGE_W - (NAV_COUNT - 1) * GAP) / NAV_COUNT;
+    static const char *nav_names[NAV_COUNT] = { "Today", "Current Radar" };
+    const int nav_w = (PAGE_W - (NAV_SLOTS - 1) * GAP) / NAV_SLOTS;
     for (int i = 0; i < NAV_COUNT; ++i) {
         nav_buttons[i] = lv_button_create(screen);
         lv_obj_remove_style_all(nav_buttons[i]);
         lv_obj_set_size(nav_buttons[i], nav_w, NAV_H);
-        lv_obj_set_pos(nav_buttons[i], PAD + i * (nav_w + GAP), NAV_Y);
+        lv_obj_set_pos(nav_buttons[i], PAD + nav_slots[i] * (nav_w + GAP), NAV_Y);
         lv_obj_set_style_bg_color(nav_buttons[i], COL_CARD, 0);
         lv_obj_set_style_bg_opa(nav_buttons[i], LV_OPA_COVER, 0);
         lv_obj_set_style_radius(nav_buttons[i], 14, 0);
@@ -1212,6 +1193,13 @@ void ui_create(const ui_callbacks_t *cb)
         lv_obj_t *label = make_label(nav_buttons[i], nav_names[i], &lv_font_montserrat_18, COL_TEXT);
         lv_obj_center(label);
     }
+
+    /* Plain text rather than a button, so it does not read as a third tab. */
+    lbl_clock = make_label(screen, "", &lv_font_montserrat_20, COL_TEXT);
+    lv_obj_set_width(lbl_clock, nav_w);
+    lv_obj_set_style_text_align(lbl_clock, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(lbl_clock, PAD + CLOCK_SLOT * (nav_w + GAP), NAV_Y + (NAV_H - 24) / 2);
+    lv_timer_create(clock_tick, 1000, NULL);
 
     show_page(PAGE_TODAY);
     refresh_zip_view();
@@ -1228,13 +1216,11 @@ void ui_set_status(const char *text)
     }
 }
 
-/* Show the place name (and ZIP, when known) on Today, Next 12 Hours and the
- * Location screen. */
+/* Show the place name (and ZIP, when known) on Today and the Location screen. */
 void ui_set_location(const char *place, const char *zip)
 {
     if (lvgl_port_lock(1000)) {
         lv_label_set_text(lbl_place, place);
-        lv_label_set_text(lbl_hourly_sub, place);
 
         /* ZIP sits under the place name on Today. Hidden rather than blanked
          * when unset (first boot uses the Kconfig coordinates and has no ZIP),
@@ -1424,6 +1410,9 @@ void ui_set_weather(const weather_data_t *data)
     bool night = data->sunrise_utc > 0 && data->sunset_utc > 0 && utc > 1700000000 &&
                  (utc < data->sunrise_utc || utc >= data->sunset_utc);
     update_wallpaper(wallpaper_sky(now->weather_code), night);
+    clock_offset_s = data->utc_offset_seconds;
+    clock_offset_known = true;
+
     lv_label_set_text_fmt(lbl_temp, "%d°", whole(now->temperature));
     lv_label_set_text(lbl_condition, weather_describe(now->weather_code));
     set_glyph(glyph_condition, now->weather_code);
@@ -1444,39 +1433,6 @@ void ui_set_weather(const weather_data_t *data)
         } else {
             lv_label_set_text(day_labels[i], "--");
             lv_label_set_text(day_temps[i], "");
-        }
-    }
-
-    /* Hourly chart: scale the y axis to the actual range so the line uses
-     * the full height instead of hugging the top or bottom. */
-    if (data->hour_count > 0) {
-        float low = data->hours[0].temperature;
-        float high = low;
-        for (int i = 1; i < data->hour_count; ++i) {
-            if (data->hours[i].temperature < low) low = data->hours[i].temperature;
-            if (data->hours[i].temperature > high) high = data->hours[i].temperature;
-        }
-        if (high - low < 4.0f) {
-            high = low + 4.0f;   // avoid a flat line filling the whole card
-        }
-        lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, (int32_t)low - 2, (int32_t)high + 2);
-        lv_chart_set_point_count(chart, data->hour_count);
-        for (int i = 0; i < data->hour_count; ++i) {
-            lv_chart_set_value_by_id(chart, chart_series, i, (int32_t)data->hours[i].temperature);
-        }
-        lv_chart_refresh(chart);
-    }
-
-    for (int i = 0; i < 8; ++i) {
-        if (i < data->hour_count) {
-            const weather_hour_t *hour = &data->hours[i];
-            lv_label_set_text(hour_labels[i], hour->label);
-            lv_label_set_text_fmt(hour_temps[i], "%d°", whole(hour->temperature));
-            lv_label_set_text_fmt(hour_rain[i], "%d%%", hour->rain_chance);
-        } else {
-            lv_label_set_text(hour_labels[i], "--");
-            lv_label_set_text(hour_temps[i], "");
-            lv_label_set_text(hour_rain[i], "");
         }
     }
 

@@ -3,17 +3,17 @@
 An ESP-IDF application for the Guiffion **JC1060P470C** — an ESP32-P4 with a
 7" 1024x600 JD9165 MIPI-DSI display and a GT911 capacitive touch panel.
 
-Five screens, driven by touch. The bottom bar has three tabs:
+Four screens, driven by touch. The bottom bar has two tabs with the local date
+and time between them:
 
 | Screen | Contents |
 | --- | --- |
 | **Today** | Current temperature and conditions, humidity / wind / rain chance / feels-like, and a 5-day strip, over a wallpaper of the current weather. **Tap a day** to open its hour-by-hour page |
-| **Next 12 Hours** | 12-hour temperature chart plus per-hour cards with rain probability |
 | **Current Radar** | Full-bleed live precipitation radar centred on your location, with state outlines |
 | **Day** | Opened from a Today day card: all 24 hours of that day as a temperature line over two rows of hour cards (temperature and rain chance). The home button returns to Today |
 | **Settings** | Two tabs behind the gear icon: **Location** (ZIP keypad) and **Wi-Fi** (network scan and password entry). A **Theme** button at the right of its header switches between dark and light mode; the choice is saved on the device |
 
-The header on Today, Next 12 Hours and Day has a **home** button on the left and,
+The header on Today and Day has a **home** button on the left and,
 on the right, a **refresh** button next to the **gear**. Refresh asks for an
 immediate weather and radar update; otherwise the device refreshes on the
 forecast's own 15-minute cadence.

@@ -3,8 +3,7 @@
  *
  * Neither service needs an API key. One forecast request returns the current
  * conditions, five daily summaries and every hourly sample for those days, so
- * the Next 12 Hours strip, the 5-day strip and the per-day pages all come from
- * a single fetch. Times in the response are local to the forecast location and
+ * the 5-day strip and the per-day pages all come from a single fetch. Times in the response are local to the forecast location and
  * the device clock is UTC, so they are converted with the response's own
  * utc_offset_seconds.
  */
@@ -330,28 +329,6 @@ static time_t iso_to_utc(const char *iso, int utc_offset)
     return as_utc == (time_t)-1 ? 0 : as_utc - utc_offset;
 }
 
-/* Index of the first hourly sample at or after now, so the strip starts at
- * the current hour rather than midnight. */
-static int first_future_hour(cJSON *times, int utc_offset)
-{
-    time_t now = time(NULL);
-    if (now < 1700000000) {
-        return 0;   // clock not set yet; just start at the top of the array
-    }
-    int count = cJSON_GetArraySize(times);
-    for (int i = 0; i < count; ++i) {
-        cJSON *entry = cJSON_GetArrayItem(times, i);
-        if (!cJSON_IsString(entry)) {
-            continue;
-        }
-        time_t sample = iso_to_utc(entry->valuestring, utc_offset);
-        if (sample != 0 && sample >= now) {
-            return i;
-        }
-    }
-    return 0;
-}
-
 /* array[index] as a float, or `fallback` if it is missing or not a number. */
 static float json_number(cJSON *array, int index, float fallback)
 {
@@ -362,7 +339,7 @@ static float json_number(cJSON *array, int index, float fallback)
 /* Fetch and parse the forecast for `location` into `out`.
  *
  * Fills: current conditions; five daily summaries with today's sunrise/sunset;
- * the next 12 hours from now (hours[]); every hour of each day (day_hours[]);
+ * every hour of each day (day_hours[]);
  * the UTC offset; and when the source says its next sample lands, so the caller
  * can schedule the following fetch. The response body is held in PSRAM and freed
  * as soon as it is parsed. Check the return value: after a network failure `out`
@@ -474,28 +451,8 @@ esp_err_t weather_fetch(const weather_location_t *location, weather_data_t *out)
         out->current.today_rain_chance = cJSON_IsNumber(today_rain) ? today_rain->valueint : 0;
     }
 
-    if (hourly) {
-        cJSON *times = cJSON_GetObjectItem(hourly, "time");
-        cJSON *temps = cJSON_GetObjectItem(hourly, "temperature_2m");
-        cJSON *chances = cJSON_GetObjectItem(hourly, "precipitation_probability");
-        int hour_total = cJSON_IsArray(times) ? cJSON_GetArraySize(times) : 0;
-        int start = first_future_hour(times, utc_offset);
-        for (int i = start; i < hour_total && out->hour_count < WEATHER_HOURLY_MAX; ++i) {
-            cJSON *entry = cJSON_GetArrayItem(times, i);
-            cJSON *temp = cJSON_GetArrayItem(temps, i);
-            if (!cJSON_IsString(entry) || !cJSON_IsNumber(temp)) {
-                continue;
-            }
-            weather_hour_t *hour = &out->hours[out->hour_count++];
-            format_hour_label(entry->valuestring, hour->label, sizeof(hour->label));
-            hour->temperature = (float)temp->valuedouble;
-            cJSON *chance = cJSON_GetArrayItem(chances, i);
-            hour->rain_chance = cJSON_IsNumber(chance) ? chance->valueint : 0;
-        }
-    }
-
-    /* The same response carries every hour of every forecast day. File each
-     * under the day whose date it starts with. */
+    /* The response carries every hour of every forecast day. File each under
+     * the day whose date it starts with. */
     if (hourly) {
         cJSON *times = cJSON_GetObjectItem(hourly, "time");
         cJSON *temps = cJSON_GetObjectItem(hourly, "temperature_2m");
@@ -526,8 +483,8 @@ esp_err_t weather_fetch(const weather_location_t *location, weather_data_t *out)
 
     cJSON_Delete(root);
     out->valid = true;
-    ESP_LOGI(TAG, "Forecast: %.0fF, %d days, %d hours; source interval %ds",
-             out->current.temperature, out->day_count, out->hour_count,
+    ESP_LOGI(TAG, "Forecast: %.0fF, %d days; source interval %ds",
+             out->current.temperature, out->day_count,
              out->interval_seconds);
     if (out->sunrise_utc && out->sunset_utc) {
         ESP_LOGI(TAG, "Sun: rise %lld, set %lld (UTC epoch)",

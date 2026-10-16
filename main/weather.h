@@ -8,7 +8,6 @@
 #include "esp_err.h"
 
 #define WEATHER_DAILY_MAX  5
-#define WEATHER_HOURLY_MAX 12
 #define WEATHER_DAY_HOURS  24
 #define WEATHER_PLACE_LEN  48
 #define WEATHER_ZIP_LEN    6
@@ -52,10 +51,7 @@ typedef struct {
     int utc_offset_seconds;
     weather_day_t days[WEATHER_DAILY_MAX];
     int day_count;
-    weather_hour_t hours[WEATHER_HOURLY_MAX];
-    int hour_count;
-    /* Every hour of each forecast day, midnight first, for the per-day page.
-     * Unlike hours[], these start at the day's midnight, not at "now". */
+    /* Every hour of each forecast day, midnight first, for the per-day page. */
     weather_hour_t day_hours[WEATHER_DAILY_MAX][WEATHER_DAY_HOURS];
     int day_hour_count[WEATHER_DAILY_MAX];
     bool valid;

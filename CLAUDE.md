@@ -14,11 +14,11 @@ Display current weather for the configured location on a wall-mounted panel.
 
 ## Screens
 
-Three tabs along the bottom, plus settings behind a gear icon:
+Two tabs along the bottom with the local date and time between them, plus
+settings behind a gear icon:
 
 - **Today** — current conditions, stat tiles, 5-day strip over a weather
   wallpaper (`main/wallpaper.c`); tapping a day opens **Day**
-- **Next 12 Hours** — 12-hour temperature chart and per-hour cards
 - **Current Radar** — full-bleed precipitation radar centred on the location
 - **Day** — all 24 hours of one forecast day (not a tab; opened from Today)
 - **Settings** — two tabs behind the gear: Location (ZIP keypad) and Wi-Fi (scan, password entry)
