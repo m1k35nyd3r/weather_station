@@ -780,7 +780,18 @@ static int refresh_now(weather_data_t *data)
          * own, rather than only when a fetch happens to land. */
         backlight_set_sun_times(data->sunrise_utc, data->sunset_utc);
         backlight_set_utc_offset(data->utc_offset_seconds);
-        ui_set_status("Updated just now");
+        /* Local time of this update, from the forecast's offset (clock is UTC). */
+        char status[32] = "Updated just now";
+        time_t now = time(NULL);
+        if (now > 1700000000) {
+            time_t local = now + data->utc_offset_seconds;
+            struct tm tm_local;
+            gmtime_r(&local, &tm_local);
+            int hour12 = tm_local.tm_hour % 12 == 0 ? 12 : tm_local.tm_hour % 12;
+            snprintf(status, sizeof(status), "Updated %d:%02d %s", hour12,
+                     tm_local.tm_min, tm_local.tm_hour < 12 ? "AM" : "PM");
+        }
+        ui_set_status(status);
         refresh_fails = 0;
     } else {
         ui_set_status("Update failed");
