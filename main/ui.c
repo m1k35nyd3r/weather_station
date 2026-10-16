@@ -89,9 +89,13 @@ static void load_palette(palette_t *p, bool light)
 
 #define PAD           24
 #define GAP           16
-#define NAV_H         68
+#define NAV_H         60
 #define PAGE_W        976      // 1024 - 2 * PAD
-#define PAGE_H        468      // 600 - 2 * PAD - NAV_H - GAP
+/* Pages start closer to the top edge than PAD; the nav bar sits on the
+ * bottom margin, GAP below the page. */
+#define PAGE_Y        12
+#define NAV_Y         (600 - PAD - NAV_H)
+#define PAGE_H        488      // NAV_Y - GAP - PAGE_Y
 #define HEADER_H      64
 /* The dark/light toggle sits at the right end of the settings header; other
  * right-aligned items on those pages stop short of it. */
@@ -446,7 +450,7 @@ static void build_today(lv_obj_t *page)
     /* 5-day strip */
     for (int i = 0; i < WEATHER_DAILY_MAX; ++i) {
         lv_obj_t *card = make_card(page, COL_CARD);
-        lv_obj_set_size(card, 182, 132);
+        lv_obj_set_size(card, 182, 152);
         lv_obj_set_pos(card, i * 198, HEADER_H + GAP + 240 + GAP);
         lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_bg_color(card, COL_DISABLED, LV_STATE_PRESSED);
@@ -1100,7 +1104,7 @@ void ui_create(const ui_callbacks_t *cb)
             lv_obj_set_pos(pages[i], 0, 0);
         } else {
             lv_obj_set_size(pages[i], PAGE_W, PAGE_H);
-            lv_obj_set_pos(pages[i], PAD, PAD);
+            lv_obj_set_pos(pages[i], PAD, PAGE_Y);
         }
         lv_obj_clear_flag(pages[i], LV_OBJ_FLAG_SCROLLABLE);
     }
@@ -1120,7 +1124,7 @@ void ui_create(const ui_callbacks_t *cb)
         nav_buttons[i] = lv_button_create(screen);
         lv_obj_remove_style_all(nav_buttons[i]);
         lv_obj_set_size(nav_buttons[i], nav_w, NAV_H);
-        lv_obj_set_pos(nav_buttons[i], PAD + i * (nav_w + GAP), PAD + PAGE_H + GAP);
+        lv_obj_set_pos(nav_buttons[i], PAD + i * (nav_w + GAP), NAV_Y);
         lv_obj_set_style_bg_color(nav_buttons[i], COL_CARD, 0);
         lv_obj_set_style_bg_opa(nav_buttons[i], LV_OPA_COVER, 0);
         lv_obj_set_style_radius(nav_buttons[i], 14, 0);
