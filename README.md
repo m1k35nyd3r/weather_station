@@ -217,6 +217,19 @@ weather_station: weather fetch took 1461 ms
 `open` is DNS + TCP + TLS, `wait` is the server rendering the image, `body` is
 the download. A refresh button press logs `manual refresh requested`.
 
+Each refresh also logs heap headroom; internal RAM is what TLS and the Wi-Fi
+transport need, so a shrinking `largest` block would point at fragmentation:
+
+```text
+weather_station: heap: internal free 177315 (min 167403, largest 90112), psram free 30640304
+```
+
+A failed forecast fetch retries after 60 s instead of waiting for the next
+scheduled slot. After **3 failures in a row** the board restarts
+(`REFRESH_FAILS_MAX` in `main.c`), which also resets the C6; boot logs
+`reset reason 3` when that happened. Nothing is logged to flash, so the reason
+for a failure is only visible on the "Full Speed USB" console.
+
 ---
 
 ## Board pin map

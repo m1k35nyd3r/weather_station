@@ -24,6 +24,7 @@
 #include "driver/i2c_master.h"
 #include "esp_check.h"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_jd9165.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_touch_gt911.h"
@@ -33,6 +34,7 @@
 #include "esp_lvgl_port.h"
 #include "esp_netif.h"
 #include "esp_netif_sntp.h"
+#include "esp_system.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -84,6 +86,11 @@
 #define WEATHER_MAX_S      3600
 /* Land just after the sample publishes rather than racing it. */
 #define WEATHER_SKEW_S     20
+/* A failed fetch retries sooner than the schedule, and enough failures in a
+ * row restart the board -- the hosted Wi-Fi link has been seen to wedge in a
+ * way only a reboot clears. */
+#define WEATHER_RETRY_S    60
+#define REFRESH_FAILS_MAX  3
 
 static const char *TAG = "weather_station";
 /* Bit WIFI_CONNECTED_BIT is set while the station has an IP address. */
@@ -724,6 +731,19 @@ static bool detect_location(void)
  * refresh. The radar is fetched on its own task while the forecast loads, then
  * joined (with a time limit) before returning. Safe to call for any trigger:
  * the schedule, a new ZIP, or the refresh button. */
+static int refresh_fails;
+
+/* Log heap headroom with each refresh. Internal RAM is what TLS and the Wi-Fi
+ * transport need, so a shrinking "largest" block points at fragmentation. */
+static void log_heap(void)
+{
+    ESP_LOGI(TAG, "heap: internal free %u (min %u, largest %u), psram free %u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
 static int refresh_now(weather_data_t *data)
 {
     if (!weather_location_is_set(&location)) {
@@ -731,6 +751,7 @@ static int refresh_now(weather_data_t *data)
         return WEATHER_FALLBACK_S;
     }
     ui_set_status("Updating...");
+    log_heap();
 
     bool radar_async = false;
     bool radar_inline = false;
@@ -760,9 +781,15 @@ static int refresh_now(weather_data_t *data)
         backlight_set_sun_times(data->sunrise_utc, data->sunset_utc);
         backlight_set_utc_offset(data->utc_offset_seconds);
         ui_set_status("Updated just now");
+        refresh_fails = 0;
     } else {
         ui_set_status("Update failed");
         data->valid = false;
+        refresh_fails++;
+        bool link_up = (xEventGroupGetBits(wifi_events) & WIFI_CONNECTED_BIT) != 0;
+        ESP_LOGW(TAG, "refresh failed (%d of %d in a row), Wi-Fi %s",
+                 refresh_fails, REFRESH_FAILS_MAX, link_up ? "up" : "down");
+        log_heap();
     }
     ESP_LOGI(TAG, "weather fetch took %lld ms", (esp_timer_get_time() - t_weather) / 1000);
     if (radar_async) {
@@ -773,7 +800,13 @@ static int refresh_now(weather_data_t *data)
     } else if (radar_inline) {
         refresh_radar(&radar_job.location);   /* no task or semaphore: do it inline */
     }
-    int wait = seconds_until_next(data);
+    if (refresh_fails >= REFRESH_FAILS_MAX) {
+        ESP_LOGE(TAG, "%d refreshes failed in a row; restarting", refresh_fails);
+        ui_set_status("Restarting...");
+        vTaskDelay(pdMS_TO_TICKS(1000));   /* let the log line and status land */
+        esp_restart();
+    }
+    int wait = refresh_fails > 0 ? WEATHER_RETRY_S : seconds_until_next(data);
     ESP_LOGI(TAG, "Next refresh in %d s", wait);
     return wait;
 }
@@ -903,6 +936,7 @@ void app_main(void)
         nvs_error = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_error);
+    ESP_LOGI(TAG, "reset reason %d", (int)esp_reset_reason());
 
     /* Keep the device clock in UTC so weather.c's offset maths is unambiguous. */
     setenv("TZ", "UTC0", 1);
