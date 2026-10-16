@@ -7,7 +7,7 @@ Five screens, driven by touch. The bottom bar has three tabs:
 
 | Screen | Contents |
 | --- | --- |
-| **Today** | Current temperature and conditions, humidity / wind / rain chance / feels-like, and a 5-day strip. **Tap a day** to open its hour-by-hour page |
+| **Today** | Current temperature and conditions, humidity / wind / rain chance / feels-like, and a 5-day strip, over a wallpaper of the current weather. **Tap a day** to open its hour-by-hour page |
 | **Next 12 Hours** | 12-hour temperature chart plus per-hour cards with rain probability |
 | **Current Radar** | Full-bleed live precipitation radar centred on your location, with state outlines |
 | **Day** | Opened from a Today day card: all 24 hours of that day as a temperature line over two rows of hour cards (temperature and rain chance). The home button returns to Today |
@@ -160,6 +160,24 @@ explicitly as well races it and logs an RPC "precondition not met" error.
 The same applies to `esp_wifi_disconnect()` and `esp_wifi_sta_get_ap_info()`
 when unassociated — both go over the hosted RPC and log on failure, which is
 why `wifi_cfg_apply()` takes an explicit `disconnect_first`.
+
+---
+
+## Weather wallpaper
+
+The Today page sits on a full-screen scene of the current weather: clear,
+partly cloudy, overcast, fog, rain, snow or storm, each with a day and a night
+version (night is between the forecast's sunset and sunrise). Nothing is stored
+in flash — `main/wallpaper.c` paints each scene from a sky gradient, sun or
+moon, cloud banks and rain or snow, then dithers it to RGB565 in PSRAM. The
+scene is dimmed for the dark theme and paled for the light one so header text
+stays readable, and Today's cards are 60% opaque (`TODAY_CARD_OPA` in `ui.c`)
+so it shows through.
+
+A render takes about 600 ms and blocks the UI, so it only happens when the
+scene, day/night or theme changes; it logs `wallpaper scene N ... rendered in`.
+`wallpaper.c` has no LVGL or ESP-IDF dependencies, so scenes can be previewed
+on the host by compiling it with a small `main()` that writes the buffer out.
 
 ---
 

@@ -22,12 +22,15 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_lvgl_port.h"
 #include "lvgl.h"
 #include "misc/cache/instance/lv_image_cache.h"
 
 #include "icons/icons.h"
+#include "wallpaper.h"
 
 /* Palette and geometry come straight from the approved 1024x600 mockup. Colours
  * are runtime values so the settings screen can switch between dark and light:
@@ -182,6 +185,19 @@ static lv_obj_t *lbl_radar_status;
 static lv_obj_t *lbl_radar_sub;
 static lv_image_dsc_t radar_dsc;
 
+/* Weather scene behind the Today page, full screen and shown only there. One
+ * RGB565 buffer in PSRAM, re-rendered in place (always under the LVGL lock, so
+ * never mid-draw) when the scene, day/night or theme changes. */
+static lv_obj_t *img_wall;
+static lv_image_dsc_t wall_dsc;
+static uint16_t *wall_buf;
+static bool wall_ready;
+static wall_sky_t wall_sky;
+static bool wall_night;
+static bool wall_light;
+/* Today's cards are translucent so the scene shows through. */
+#define TODAY_CARD_OPA LV_OPA_60
+
 /* Location */
 static lv_obj_t *lbl_zip;
 static lv_obj_t *lbl_zip_hint;
@@ -257,6 +273,51 @@ static void set_glyph(lv_obj_t *label, int code)
     lv_obj_set_style_text_color(label, condition_color(code), 0);
 }
 
+/* Paint the scene for `sky` and `night` in the current theme and show it if
+ * Today is up. Does nothing when that exact scene is already on screen, so it
+ * is cheap to call on every forecast. Caller holds the LVGL lock; rendering
+ * takes a few hundred ms, which only happens a few times a day. */
+static void update_wallpaper(wall_sky_t sky, bool night)
+{
+    if (wall_ready && sky == wall_sky && night == wall_night && light_mode == wall_light) {
+        return;
+    }
+    if (wall_buf == NULL) {
+        wall_buf = heap_caps_malloc(WALLPAPER_W * WALLPAPER_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (wall_buf == NULL) {
+            ESP_LOGW(TAG, "no memory for the wallpaper");
+            return;
+        }
+    }
+    int64_t start = esp_timer_get_time();
+    if (!wallpaper_render(wall_buf, sky, night, light_mode)) {
+        ESP_LOGW(TAG, "no scratch memory to render the wallpaper");
+        return;
+    }
+    ESP_LOGI(TAG, "wallpaper scene %d (%s, %s theme) rendered in %lld ms", sky,
+             night ? "night" : "day", light_mode ? "light" : "dark",
+             (esp_timer_get_time() - start) / 1000);
+    wall_sky = sky;
+    wall_night = night;
+    wall_light = light_mode;
+    wall_ready = true;
+
+    /* Same buffer every time, so drop any cached copy before re-pointing. */
+    lv_image_cache_drop(&wall_dsc);
+    wall_dsc.header.magic = LV_IMAGE_HEADER_MAGIC;
+    wall_dsc.header.cf = LV_COLOR_FORMAT_RGB565;
+    wall_dsc.header.w = WALLPAPER_W;
+    wall_dsc.header.h = WALLPAPER_H;
+    wall_dsc.header.stride = WALLPAPER_W * sizeof(uint16_t);
+    wall_dsc.data = (const uint8_t *)wall_buf;
+    wall_dsc.data_size = WALLPAPER_W * WALLPAPER_H * sizeof(uint16_t);
+    lv_image_set_src(img_wall, &wall_dsc);
+    lv_obj_invalidate(img_wall);
+    if (active_page == PAGE_TODAY) {
+        lv_obj_clear_flag(img_wall, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void show_page(ui_page_t page);
 static void fill_day_page(void);
 
@@ -274,6 +335,11 @@ static void show_page(ui_page_t page)
         }
     }
     style_settings_tabs(page);
+    if (wall_ready && page == PAGE_TODAY) {
+        lv_obj_clear_flag(img_wall, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(img_wall, LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* Settings has no tab, so every button goes inactive while it is open. */
     for (int i = 0; i < NAV_COUNT; ++i) {
@@ -417,6 +483,7 @@ static void build_today(lv_obj_t *page)
 
     /* Current conditions card */
     lv_obj_t *now = make_card(page, COL_CARD);
+    lv_obj_set_style_bg_opa(now, TODAY_CARD_OPA, 0);
     lv_obj_set_size(now, 380, 240);
     lv_obj_set_pos(now, 0, HEADER_H + GAP);
 
@@ -436,6 +503,7 @@ static void build_today(lv_obj_t *page)
     static const char *tile_names[4] = { "HUMIDITY", "WIND", "RAIN CHANCE", "FEELS LIKE" };
     for (int i = 0; i < 4; ++i) {
         lv_obj_t *tile = make_card(page, COL_CARD);
+        lv_obj_set_style_bg_opa(tile, TODAY_CARD_OPA, 0);
         lv_obj_set_size(tile, 282, 112);
         lv_obj_set_pos(tile, 396 + (i % 2) * 298, HEADER_H + GAP + (i / 2) * 128);
 
@@ -450,6 +518,7 @@ static void build_today(lv_obj_t *page)
     /* 5-day strip */
     for (int i = 0; i < WEATHER_DAILY_MAX; ++i) {
         lv_obj_t *card = make_card(page, COL_CARD);
+        lv_obj_set_style_bg_opa(card, TODAY_CARD_OPA, 0);
         lv_obj_set_size(card, 182, 152);
         lv_obj_set_pos(card, i * 198, HEADER_H + GAP + 240 + GAP);
         lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
@@ -718,6 +787,9 @@ static void apply_theme(bool light)
     recolor_tree(screen, &old, &pal);
     lv_chart_set_series_color(chart, chart_series, COL_WARM);
     lv_chart_set_series_color(day_chart, day_series, COL_WARM);
+    if (wall_ready) {
+        update_wallpaper(wall_sky, wall_night);   /* same scene, new tint */
+    }
     for (int i = 0; i < 2; ++i) {
         lv_label_set_text(theme_labels[i], light ? "Theme: Light" : "Theme: Dark");
     }
@@ -1095,6 +1167,12 @@ void ui_create(const ui_callbacks_t *cb)
     lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* First child, so every page and the nav bar draw over it. */
+    img_wall = lv_image_create(screen);
+    lv_obj_set_size(img_wall, WALLPAPER_W, WALLPAPER_H);
+    lv_obj_set_pos(img_wall, 0, 0);
+    lv_obj_add_flag(img_wall, LV_OBJ_FLAG_HIDDEN);
+
     for (int i = 0; i < PAGE_COUNT; ++i) {
         pages[i] = lv_obj_create(screen);
         lv_obj_remove_style_all(pages[i]);
@@ -1341,6 +1419,11 @@ void ui_set_weather(const weather_data_t *data)
     }
 
     const weather_current_t *now = &data->current;
+    /* Night between today's sunset and sunrise; day if the times are missing. */
+    time_t utc = time(NULL);
+    bool night = data->sunrise_utc > 0 && data->sunset_utc > 0 && utc > 1700000000 &&
+                 (utc < data->sunrise_utc || utc >= data->sunset_utc);
+    update_wallpaper(wallpaper_sky(now->weather_code), night);
     lv_label_set_text_fmt(lbl_temp, "%d°", whole(now->temperature));
     lv_label_set_text(lbl_condition, weather_describe(now->weather_code));
     set_glyph(glyph_condition, now->weather_code);

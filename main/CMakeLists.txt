@@ -10,7 +10,7 @@ else()
 endif()
 
 idf_component_register(
-    SRCS "main.c" "ui.c" "weather.c" "radar.c" "wifi_cfg.c" "backlight.c" ${ICON_SRCS}
+    SRCS "wallpaper.c" "main.c" "ui.c" "weather.c" "radar.c" "wifi_cfg.c" "backlight.c" ${ICON_SRCS}
     INCLUDE_DIRS "."
     REQUIRES esp_lcd_jd9165 esp_lcd_touch_gt911 esp_lvgl_port lvgl nvs_flash esp_wifi esp_wifi_remote esp_hosted esp_http_client mbedtls cjson
 )
