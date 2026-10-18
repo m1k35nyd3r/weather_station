@@ -25,6 +25,12 @@
 /* How long after the last touch before settling to the idle level. */
 #define BACKLIGHT_IDLE_AFTER_S   600
 
+/* Call before backlight_init() when booting from the nightly restart: the
+ * backlight starts off instead of at full brightness, the saved UTC offset is
+ * applied at once so quiet hours are known before any forecast, and the screen
+ * stays dark until a real touch or until quiet hours are over. */
+void backlight_boot_dark(int utc_offset_seconds);
+
 /* Configure LEDC PWM on the backlight pin. The board wires GPIO23 to the
  * MP3202 boost driver's EN input, and the net is named LCD_PWM: duty-cycle
  * dimming is how the hardware is meant to be driven. */

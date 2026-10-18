@@ -248,6 +248,20 @@ scheduled slot. After **3 failures in a row** the board restarts
 `reset reason 3` when that happened. Nothing is logged to flash, so the reason
 for a failure is only visible on the "Full Speed USB" console.
 
+The board also restarts itself **once a night at 3:00 local**, inside the quiet
+hours (`NIGHTLY_RESTART_HOUR` in `main.c`), so heap fragmentation never gets
+more than a day old. A note in RTC memory (which survives `esp_restart()` but
+not power loss) tells the next boot it was the nightly restart and carries the
+UTC offset; the system clock survives a software restart too, so the backlight
+starts off and stays off until a touch or the end of quiet hours
+(`backlight_boot_dark()`). It needs 2 hours of uptime first, so the fresh boot
+never restarts again within the same hour.
+
+TLS buffers live in PSRAM (`CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC`). With them in
+internal RAM, the two parallel HTTPS requests left the largest free internal
+block at 30-60 KB after the first refresh; in PSRAM it stays above 80 KB, and
+the lowest free internal RAM during a refresh rose from ~75 KB to ~155 KB.
+
 ---
 
 ## Board pin map

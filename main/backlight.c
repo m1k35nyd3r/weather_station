@@ -40,6 +40,11 @@ static bool was_night;
 static int utc_offset_s;
 static bool utc_offset_known;
 static bool was_quiet;
+static bool hold_dark;   /* booted by the nightly restart; see backlight_boot_dark() */
+
+/* LVGL counts the display's creation as activity, so any "touch" this early
+ * after boot is not one. */
+#define BOOT_GRACE_MS 5000
 
 /* Set up the LEDC timer and channel on `gpio` at full brightness. */
 esp_err_t backlight_init(int gpio)
@@ -60,7 +65,7 @@ esp_err_t backlight_init(int gpio)
         .channel = BL_CHANNEL,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = BL_TIMER,
-        .duty = BL_MAX_DUTY,
+        .duty = hold_dark ? 0 : BL_MAX_DUTY,
         .hpoint = 0,
     };
     ESP_RETURN_ON_FALSE(ledc_channel_config(&channel) == ESP_OK, ESP_FAIL, TAG,
@@ -72,8 +77,9 @@ esp_err_t backlight_init(int gpio)
         ESP_LOGW(TAG, "LEDC fade unavailable; brightness will step");
     }
 
-    current_percent = BACKLIGHT_DAY_ACTIVE;
-    ESP_LOGI(TAG, "backlight on GPIO%d, PWM %dHz", gpio, BL_FREQ_HZ);
+    current_percent = hold_dark ? 0 : BACKLIGHT_DAY_ACTIVE;
+    ESP_LOGI(TAG, "backlight on GPIO%d, PWM %dHz%s", gpio, BL_FREQ_HZ,
+             hold_dark ? ", starting dark" : "");
     return ESP_OK;
 }
 
@@ -104,6 +110,12 @@ void backlight_set(int percent)
 int backlight_get(void)
 {
     return current_percent;
+}
+
+void backlight_boot_dark(int utc_offset_seconds)
+{
+    hold_dark = true;
+    backlight_set_utc_offset(utc_offset_seconds);
 }
 
 /* Store today's sunrise and sunset (UTC epochs) for the night test. */
@@ -156,6 +168,19 @@ static void idle_timer_cb(lv_timer_t *timer)
 {
     LV_UNUSED(timer);
     uint32_t idle_ms = lv_display_get_inactive_time(NULL);
+
+    /* After the nightly restart, stay dark until someone really touches the
+     * screen, or the clock is back and quiet hours are over. */
+    if (hold_dark) {
+        bool touched = lv_tick_get() - idle_ms > BOOT_GRACE_MS;
+        bool clock_ok = time(NULL) >= 1700000000;
+        if (!touched && (!clock_ok || backlight_is_quiet_hours())) {
+            return;
+        }
+        hold_dark = false;
+        ESP_LOGI(TAG, "leaving post-restart dark hold (%s)", touched ? "touched" : "quiet hours over");
+    }
+
     bool night = backlight_is_night();
     bool idle = idle_ms >= BACKLIGHT_IDLE_AFTER_S * 1000U;
 

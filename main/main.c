@@ -92,6 +92,20 @@
 #define WEATHER_RETRY_S    60
 #define REFRESH_FAILS_MAX  3
 
+/* Restart once a night, inside the quiet hours while the screen is dark, so
+ * heap fragmentation and any slow-building trouble never get more than a day
+ * old. The uptime floor stops the fresh boot restarting again within the hour. */
+#define NIGHTLY_RESTART_HOUR    3
+#define NIGHTLY_MIN_UPTIME_S    (2 * 3600)
+/* Survives esp_restart() (not power loss): tells the next boot it was the
+ * nightly restart, and carries the UTC offset so it can start dark. */
+#define NIGHTLY_MAGIC           0x4E494748u   /* "NIGH" */
+typedef struct {
+    uint32_t magic;
+    int32_t utc_offset_s;
+} nightly_note_t;
+static RTC_NOINIT_ATTR nightly_note_t nightly_note;
+
 static const char *TAG = "weather_station";
 /* Bit WIFI_CONNECTED_BIT is set while the station has an IP address. */
 static EventGroupHandle_t wifi_events;
@@ -732,6 +746,9 @@ static bool detect_location(void)
  * joined (with a time limit) before returning. Safe to call for any trigger:
  * the schedule, a new ZIP, or the refresh button. */
 static int refresh_fails;
+/* Local offset from the last good forecast, for the nightly restart. */
+static int local_offset_s;
+static bool local_offset_known;
 
 /* Log heap headroom with each refresh. Internal RAM is what TLS and the Wi-Fi
  * transport need, so a shrinking "largest" block points at fragmentation. */
@@ -742,6 +759,26 @@ static void log_heap(void)
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
+
+/* Restart if it is NIGHTLY_RESTART_HOUR local and we have been up long enough. */
+static void maybe_nightly_restart(void)
+{
+    time_t utc = time(NULL);
+    if (!local_offset_known || utc < 1700000000 ||
+        esp_timer_get_time() < (int64_t)NIGHTLY_MIN_UPTIME_S * 1000000) {
+        return;
+    }
+    int hour = (int)(((utc + local_offset_s) % 86400) / 3600);
+    if (hour != NIGHTLY_RESTART_HOUR) {
+        return;
+    }
+    log_heap();
+    ESP_LOGW(TAG, "nightly restart");
+    nightly_note.magic = NIGHTLY_MAGIC;
+    nightly_note.utc_offset_s = local_offset_s;
+    vTaskDelay(pdMS_TO_TICKS(500));   /* let the log line out */
+    esp_restart();
 }
 
 static int refresh_now(weather_data_t *data)
@@ -780,6 +817,8 @@ static int refresh_now(weather_data_t *data)
          * own, rather than only when a fetch happens to land. */
         backlight_set_sun_times(data->sunrise_utc, data->sunset_utc);
         backlight_set_utc_offset(data->utc_offset_seconds);
+        local_offset_s = data->utc_offset_seconds;
+        local_offset_known = true;
         /* Local time of this update, from the forecast's offset (clock is UTC). */
         char status[32] = "Updated just now";
         time_t now = time(NULL);
@@ -932,6 +971,7 @@ static void weather_task(void *arg)
         if (xTaskGetTickCount() >= next_refresh) {
             next_refresh = xTaskGetTickCount() + pdMS_TO_TICKS(refresh_now(data) * 1000);
         }
+        maybe_nightly_restart();
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
@@ -947,7 +987,13 @@ void app_main(void)
         nvs_error = nvs_flash_init();
     }
     ESP_ERROR_CHECK(nvs_error);
-    ESP_LOGI(TAG, "reset reason %d", (int)esp_reset_reason());
+    esp_reset_reason_t reason = esp_reset_reason();
+    ESP_LOGI(TAG, "reset reason %d, clock %lld", (int)reason, (long long)time(NULL));
+    if (reason == ESP_RST_SW && nightly_note.magic == NIGHTLY_MAGIC) {
+        ESP_LOGI(TAG, "booted from the nightly restart; screen stays dark");
+        backlight_boot_dark(nightly_note.utc_offset_s);
+    }
+    nightly_note.magic = 0;   /* one boot only; any other restart lights normally */
 
     /* Keep the device clock in UTC so weather.c's offset maths is unambiguous. */
     setenv("TZ", "UTC0", 1);

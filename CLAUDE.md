@@ -24,7 +24,8 @@ settings behind a gear icon:
 - **Settings** — two tabs behind the gear: Location (ZIP keypad) and Wi-Fi (scan, password entry)
 
 Page headers have home, refresh and gear buttons. The screen is off from
-1:00 to 7:00 local unless touched (`main/backlight.c`).
+1:00 to 7:00 local unless touched (`main/backlight.c`), and the board restarts
+itself at 3:00 local, booting with the screen still dark.
 
 ## Build
 

@@ -24,6 +24,12 @@ CONFIG_SPIRAM_XIP_FROM_PSRAM=y
 CONFIG_CACHE_L2_CACHE_256KB=y
 CONFIG_CACHE_L2_CACHE_LINE_128B=y
 
+# TLS buffers in PSRAM rather than internal RAM. Two HTTPS requests run at
+# once (weather + radar) and their ~40-50 KB each, held while small permanent
+# allocations land around them, left the largest free internal block at 30-60 KB
+# after the first refresh. Costs a few ms per handshake.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y
+
 # app_main runs the whole display bring-up; the 3584-byte default is tight.
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=10240
 CONFIG_FREERTOS_HZ=1000
